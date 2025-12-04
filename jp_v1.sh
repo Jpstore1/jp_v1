@@ -644,3 +644,160 @@ renew_account(){
 }
 
 # END OF PART 3 / 4
+# JP_V2 (Full - Part 4/4)
+# Lanjutan langsung dari Part 3
+
+# ==================================================
+# ZIPVPN PRO
+# ==================================================
+msg "Setting up ZIPVPN..."
+
+zipvpn_pro_manager_cli(){
+  echo
+  echo "=== ZIPVPN PRO MANAGER ==="
+  echo "1) Create ZIPVPN User"
+  echo "2) Delete ZIPVPN User"
+  echo "3) List ZIPVPN Users"
+  echo "0) Back"
+  echo -ne "Choice: "
+  read -r c
+
+  case $c in
+    1)
+      echo -ne "Username: "
+      read -r u
+      echo -ne "Password: "
+      read -r p
+      jq --arg user "$u" --arg pass "$p" \
+        '.users += [{name: $user, password: $pass}]' \
+        /etc/zipvpn/config.json > tmp.json &&
+      mv tmp.json /etc/zipvpn/config.json
+      ok "ZIPVPN user added!"
+      ;;
+    2)
+      echo -ne "Username: "
+      read -r u
+      jq --arg user "$u" \
+        'del(.users[] | select(.name==$user))' \
+        /etc/zipvpn/config.json > tmp.json &&
+      mv tmp.json /etc/zipvpn/config.json
+      ok "ZIPVPN user removed!"
+      ;;
+    3)
+      echo "=== Users ==="
+      jq '.users' /etc/zipvpn/config.json
+      ;;
+    0) return ;;
+    *) err "Invalid"; sleep 1 ;;
+  esac
+}
+
+# ==================================================
+# BACKUP / RESTORE
+# ==================================================
+create_backup(){
+  msg "Creating backup..."
+  mkdir -p /root/jp_backup
+  cp -r /usr/local/etc/xray /root/jp_backup/
+  cp -r /etc/nginx /root/jp_backup/
+  cp -r /etc/zipvpn /root/jp_backup/
+  cp /root/users.txt /root/jp_backup/
+  tar -czf jp_backup.tar.gz /root/jp_backup
+  ok "Backup saved → jp_backup.tar.gz"
+}
+
+restore_backup(){
+  msg "Restoring backup..."
+  tar -xzf jp_backup.tar.gz -C /
+  ok "Backup restored!"
+}
+
+# ==================================================
+# INSTALL / REINSTALL CORE SERVICES
+# ==================================================
+install_all_services(){
+  msg "Installing JP_V2 core services..."
+
+  apt update -y
+  apt install -y nginx unzip jq curl socat
+
+  systemctl enable nginx
+  systemctl restart nginx
+
+  msg "Installing XRAY..."
+  bash <(curl -s https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh)
+
+  msg "Installing ZIPVPN..."
+  mkdir -p /etc/zipvpn
+  cat > /etc/zipvpn/config.json <<EOF_ZIP
+{
+  "port": $ZIPVPN_PORT,
+  "tls": true,
+  "users": []
+}
+EOF_ZIP
+
+  ok "All core services installed!"
+}
+
+# ==================================================
+# DDOS PROTECTION
+# ==================================================
+install_ddos_protection(){
+  msg "Installing basic DDoS protection..."
+  apt install -y iptables-persistent
+
+  iptables -A INPUT -p tcp --dport 443 -m connlimit --connlimit-above 40 --connlimit-mask 32 -j DROP
+  iptables -A INPUT -p tcp --dport 80 -m connlimit --connlimit-above 100 --connlimit-mask 32 -j DROP
+
+  netfilter-persistent save
+
+  ok "DDoS protection enabled!"
+}
+
+# ==================================================
+# MAIN MENU
+# ==================================================
+main_menu(){
+  while true; do
+    clear
+    echo -e "${C}======= JP_V2 VPS PANEL =======${Z}"
+    echo -e "${G}1) Install / Reinstall All${Z}"
+    echo -e "${G}2) Create Multi User${Z}"
+    echo -e "${G}3) Check Expired & Cleanup${Z}"
+    echo -e "${G}4) Renew Account${Z}"
+    echo -e "${G}5) Install DDoS Protection${Z}"
+    echo -e "${G}6) Port Monitor${Z}"
+    echo -e "${G}7) ZIPVPN Manager${Z}"
+    echo -e "${G}8) Backup / Restore${Z}"
+    echo -e "${G}0) Exit${Z}"
+    echo -ne "Choice: "
+    read -r opt
+
+    case $opt in
+      1) install_all_services ;;
+      2) echo -ne "User: "; read -r u
+         echo -ne "Pass: "; read -r p
+         echo -ne "Days: "; read -r d
+         create_user "$u" "$p" "$d" ;;
+      3) check_expired ;;
+      4) renew_account ;;
+      5) install_ddos_protection ;;
+      6) watch -n 1 "ss -tulnp | grep -E '443|80|$ZIPVPN_PORT|$XRAY_VMESS_PORT|$XRAY_VLESS_PORT|$XRAY_TROJAN_PORT'" ;;
+      7) zipvpn_pro_manager_cli ;;
+      8) echo "1) Backup  2) Restore"
+         read -r br
+         [[ $br == 1 ]] && create_backup
+         [[ $br == 2 ]] && restore_backup ;;
+      0) exit 0 ;;
+      *) echo "Invalid"; sleep 1 ;;
+    esac
+  done
+}
+
+# ==================================================
+# START JP_V2
+# ==================================================
+main_menu
+
+# END OF PART 4 (FINAL)

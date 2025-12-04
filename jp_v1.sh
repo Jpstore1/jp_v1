@@ -430,3 +430,227 @@ EOF
     systemctl enable hysteria
     systemctl restart hysteria
 }
+# ================================================
+# Install ZIPVPN (UDP)
+# ================================================
+install_zipvpn(){
+    msg "Installing ZIPVPN..."
+
+    mkdir -p /etc/zivpn
+
+    if ! command -v zivpn >/dev/null 2>&1; then
+        cd /tmp
+        wget -q -O zi.sh https://raw.githubusercontent.com/zahidbd2/udp-zivpn/main/zi.sh
+        bash zi.sh >/dev/null 2>&1
+    fi
+
+    if [[ ! -f /etc/zivpn/config.json ]]; then
+        echo '{"users":{},"port":'"${ZIPVPN_PORT}"',"tls":true}' > /etc/zivpn/config.json
+    fi
+
+    jq --arg cert "$SSL_PATH/fullchain.pem" \
+       --arg key "$SSL_PATH/privkey.pem" \
+       '.cert=$cert | .key=$key' /etc/zivpn/config.json > /tmp/zivpn1.json
+    mv /tmp/zivpn1.json /etc/zivpn/config.json
+
+    jq --arg port "$ZIPVPN_PORT" \
+       '.port=($port|tonumber)' /etc/zivpn/config.json > /tmp/zivpn2.json
+    mv /tmp/zivpn2.json /etc/zivpn/config.json
+
+    jq --arg pass "$ZIVPN_PASS" \
+       '.users.admin={"password":$pass,"limit_up":100,"limit_down":100}' \
+       /etc/zivpn/config.json > /tmp/zivpn3.json
+    mv /tmp/zivpn3.json /etc/zivpn/config.json
+
+    systemctl restart zivpn 2>/dev/null || true
+    systemctl enable zivpn 2>/dev/null || true
+
+    ok "ZIPVPN installed!"
+}
+
+# ================================================
+# NGINX CONFIG
+# ================================================
+install_nginx(){
+    msg "Configuring Nginx..."
+
+    rm -f /etc/nginx/sites-enabled/default
+    rm -f /etc/nginx/sites-available/default
+
+    cat > /etc/nginx/sites-available/jp_v2 <<EOF
+server {
+    listen 80;
+    server_name ${DOMAIN};
+
+    location /ssh-ws {
+        proxy_pass http://127.0.0.1:${WS_SSH_PORT};
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
+
+    location / {
+        return 301 https://${DOMAIN}\$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name ${DOMAIN};
+
+    ssl_certificate     ${SSL_PATH}/fullchain.pem;
+    ssl_certificate_key ${SSL_PATH}/privkey.pem;
+
+    location /vmess-ws {
+        proxy_pass http://127.0.0.1:${XRAY_VMESS_PORT};
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
+
+    location /vless-ws {
+        proxy_pass http://127.0.0.1:${XRAY_VLESS_PORT};
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
+
+    location /trojan-ws {
+        proxy_pass http://127.0.0.1:${XRAY_TROJAN_PORT};
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
+
+    location /ssh-ws-tls {
+        proxy_pass http://127.0.0.1:${XRAY_VMESS_PORT};
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
+}
+EOF
+
+    ln -sf /etc/nginx/sites-available/jp_v2 /etc/nginx/sites-enabled/
+
+    systemctl restart nginx
+    ok "Nginx configured!"
+}
+
+# ================================================
+# XRAY CONFIG BUILDER
+# ================================================
+install_xray_config(){
+    msg "Generating XRAY config..."
+
+    mkdir -p /usr/local/etc/xray
+
+    UUID_VMESS=$(generate_uuid)
+    UUID_VLESS=$(generate_uuid)
+    UUID_TROJAN=$(generate_uuid)
+
+    cat > /usr/local/etc/xray/config.json <<EOF
+{
+  "inbounds": [
+    {
+      "port": ${XRAY_VMESS_PORT},
+      "protocol": "vmess",
+      "settings": {
+        "clients": [{"id": "${UUID_VMESS}"}]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": { "path": "/vmess-ws" }
+      }
+    },
+    {
+      "port": ${XRAY_VLESS_PORT},
+      "protocol": "vless",
+      "settings": {
+        "clients": [{"id": "${UUID_VLESS}"}],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": { "path": "/vless-ws" }
+      }
+    },
+    {
+      "port": ${XRAY_TROJAN_PORT},
+      "protocol": "trojan",
+      "settings": {
+        "clients": [{"password": "${TROJAN_PASS}"}]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": { "path": "/trojan-ws" }
+      }
+    }
+  ],
+  "outbounds": [
+    { "protocol": "freedom" },
+    { "protocol": "blackhole", "tag": "blocked" }
+  ]
+}
+EOF
+
+    systemctl restart xray
+    systemctl enable xray
+
+    ok "XRAY config installed!"
+}
+
+# ================================================
+# Final Installation Handler
+# ================================================
+complete_install(){
+    install_ssh_multi
+    install_nginx
+    install_xray_config
+    install_zipvpn
+
+    touch /root/jp_v1-installed.flag
+
+    ok "JP_V2 Installation Completed!"
+}
+
+# ================================================
+# User Management (Create / Expire / Renew)
+# ================================================
+create_user(){
+    username="$1"
+    password="$2"
+    days="$3"
+
+    exp_date=$(date -d "+${days} days" +"%Y-%m-%d")
+
+    echo "$username $password $exp_date" >> /root/users.txt
+    ok "User created: $username | Expire: $exp_date"
+}
+
+check_expired(){
+    today=$(date +"%Y-%m-%d")
+    if [[ ! -f /root/users.txt ]]; then echo "0"; return; fi
+
+    while read -r u p exp; do
+        if [[ "$exp" < "$today" ]]; then
+            sed -i "/$u $p $exp/d" /root/users.txt
+            echo -e "${R}User expired: $u${Z}"
+        fi
+    done < /root/users.txt
+}
+
+renew_account(){
+    echo -ne "${Y}Username: ${Z}"
+    read -r user
+    echo -ne "${Y}Extra days: ${Z}"
+    read -r days
+
+    old_exp=$(grep "^$user" /root/users.txt | awk '{print $3}')
+    [[ -z "$old_exp" ]] && echo -e "${R}User not found!${Z}" && return
+
+    new_exp=$(date -d "$old_exp + $days days" +"%Y-%m-%d")
+
+    sed -i "s/$old_exp/$new_exp/" /root/users.txt
+    ok "Updated: $user | New Exp: $new_exp"
+}

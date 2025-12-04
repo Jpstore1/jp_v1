@@ -393,3 +393,254 @@ EOF
   ok "ZIPVPN installed!"
 
 # END OF PART 2/4
+# JP_V2 (Full - Part 3/4)
+# Lanjutan langsung dari Part 2
+
+# ==================================================
+# NGINX CONFIGURATION
+# ==================================================
+msg "Configuring Nginx..."
+
+cat > /etc/nginx/sites-available/jp_v2 <<'EOF_NGINX'
+server {
+    listen 80;
+    listen [::]:80;
+    server_name DOMAIN_PLACEHOLDER;
+
+    location /ssh-ws {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:WS_SSH_PORT_PLACEHOLDER;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $http_host;
+    }
+
+    location / {
+        return 301 https://$server_name$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name DOMAIN_PLACEHOLDER;
+
+    ssl_certificate SSL_FULLCHAIN_PLACEHOLDER;
+    ssl_certificate_key SSL_PRIVKEY_PLACEHOLDER;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
+    ssl_prefer_server_ciphers on;
+
+    add_header Strict-Transport-Security "max-age=63072000" always;
+
+    # VMESS WS
+    location /vmess-ws {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:XRAY_VMESS_PORT_PLACEHOLDER;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # VLESS WS
+    location /vless-ws {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:XRAY_VLESS_PORT_PLACEHOLDER;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # TROJAN WS
+    location /trojan-ws {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:XRAY_TROJAN_PORT_PLACEHOLDER;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # SSH WS TLS
+    location /ssh-ws-tls {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:XRAY_VMESS_PORT_PLACEHOLDER;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+EOF_NGINX
+
+# Replace placeholders
+sed -i "s/DOMAIN_PLACEHOLDER/$DOMAIN/g" /etc/nginx/sites-available/jp_v2
+sed -i "s#SSL_FULLCHAIN_PLACEHOLDER#$SSL_PATH/fullchain.pem#g" /etc/nginx/sites-available/jp_v2
+sed -i "s#SSL_PRIVKEY_PLACEHOLDER#$SSL_PATH/privkey.pem#g" /etc/nginx/sites-available/jp_v2
+sed -i "s/WS_SSH_PORT_PLACEHOLDER/$WS_SSH_PORT/g" /etc/nginx/sites-available/jp_v2
+sed -i "s/XRAY_VMESS_PORT_PLACEHOLDER/$XRAY_VMESS_PORT/g" /etc/nginx/sites-available/jp_v2
+sed -i "s/XRAY_VLESS_PORT_PLACEHOLDER/$XRAY_VLESS_PORT/g" /etc/nginx/sites-available/jp_v2
+sed -i "s/XRAY_TROJAN_PORT_PLACEHOLDER/$XRAY_TROJAN_PORT/g" /etc/nginx/sites-available/jp_v2
+
+ln -sf /etc/nginx/sites-available/jp_v2 /etc/nginx/sites-enabled/jp_v2
+
+systemctl restart nginx
+ok "Nginx configured!"
+
+# ==================================================
+# XRAY CONFIGURATION
+# ==================================================
+msg "Configuring XRAY..."
+
+mkdir -p /usr/local/etc/xray
+
+XRAY_UUID=$(generate_uuid)
+
+cat > /usr/local/etc/xray/config.json <<EOF_XRAY
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "port": $XRAY_VMESS_PORT,
+      "listen": "127.0.0.1",
+      "protocol": "vmess",
+      "settings": {
+        "clients": [
+          {
+            "id": "$XRAY_UUID",
+            "alterId": 0
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {
+          "path": "/vmess-ws"
+        }
+      }
+    },
+    {
+      "port": $XRAY_VLESS_PORT,
+      "listen": "127.0.0.1",
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "$XRAY_UUID"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {
+          "path": "/vless-ws"
+        }
+      }
+    },
+    {
+      "port": $XRAY_TROJAN_PORT,
+      "listen": "127.0.0.1",
+      "protocol": "trojan",
+      "settings": {
+        "clients": [
+          {
+            "password": "$TROJAN_PASS"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {
+          "path": "/trojan-ws"
+        }
+      }
+    }
+  ],
+
+  "outbounds": [
+    {
+      "protocol": "freedom"
+    }
+  ]
+}
+EOF_XRAY
+
+systemctl enable xray
+systemctl restart xray
+
+ok "XRAY configured!"
+
+# ==================================================
+# USER MANAGEMENT
+# ==================================================
+msg "Setting up user manager..."
+
+touch /root/users.txt
+
+create_user(){
+  local user="$1"
+  local pass="$2"
+  local days="$3"
+
+  if id "$user" >/dev/null 2>&1; then
+    err "User $user already exists!"
+    return
+  fi
+
+  useradd -M -s /bin/false "$user"
+  echo "$user:$pass" | chpasswd
+
+  expire_date=$(date -d "$days days" +"%Y-%m-%d")
+  chage -E "$expire_date" "$user"
+
+  echo "$user $pass $expire_date" >> /root/users.txt
+
+  ok "User created: $user (expired: $expire_date)"
+}
+
+check_expired(){
+  msg "Checking expired users..."
+
+  today=$(date +%Y-%m-%d)
+  tmp=$(mktemp)
+
+  while read -r u p exp; do
+    if [[ "$exp" < "$today" ]]; then
+      userdel -f "$u" >/dev/null 2>&1
+    else
+      echo "$u $p $exp" >> "$tmp"
+    fi
+  done < /root/users.txt
+
+  mv "$tmp" /root/users.txt
+  ok "Expired users cleaned"
+}
+
+renew_account(){
+  echo -ne "Username: "
+  read -r u
+  echo -ne "Extra days: "
+  read -r d
+
+  new_date=$(date -d "$d days" +"%Y-%m-%d")
+  chage -E "$new_date" "$u"
+  sed -i "s/^$u .*/$u $(grep $u /root/users.txt | awk '{print $2}') $new_date/" /root/users.txt
+
+  ok "User $u renewed until $new_date"
+}
+
+# END OF PART 3 / 4

@@ -1,0 +1,69 @@
+#!/bin/bash 
+# ================================================================================================ 
+# JP_V1 v1.0 Configuration Example 
+# ================================================================================================ 
+ 
+# ================================================== 
+# PENTING: GANTI NILAI INI DENGAN DATA VPS ANDA! 
+# = ================================================= 
+ 
+# 🔗 Domain Anda (WAJIB diisi!) 
+# Contoh: vpn.example.com 
+export DOMAIN="your_domain_here.com" 
+ 
+# 🔐 Port SSH (OpenSSH) 
+# Default: 2222 
+export SSH_PORT="2222" 
+ 
+# 🌪️ Port Hysteria V1 (UDP) 
+# Default: 40000 
+export HYSTERIA_PORT="40000" 
+ 
+# ⚡ Port ZIPVPN (UDP) 
+# Default: 5667 
+export ZIPVPN_PORT="5667" 
+ 
+# ================================================== 
+# PORT INTERNAL / DEFAULT (JANGAN DIUBAH KECUALI TAHU APA YANG ANDA LAKUKAN) 
+# ================================================== 
+ 
+# Path ke Sertifikat SSL (biasanya dari Let's Encrypt) 
+export SSL_PATH="/etc/letsencrypt/live/$DOMAIN" 
+ 
+# Dropbear SSH Ports 
+export DROPBEAR_PORT1="442" 
+export DROPBEAR_PORT2="109" 
+ 
+# WebSocket Ports (Nginx) 
+export WS_TLS_PORT="443"  # Untuk SSH WebSocket TLS, Xray VMess/VLESS/Trojan 
+export WS_NON_TLS_PORT="80" # Untuk SSH WebSocket Non-TLS 
+ 
+# Xray Internal Ports (Dipass-through oleh Nginx atau di-listen langsung) 
+export XRAY_VMESS_PORT="10000" 
+export XRAY_VLESS_PORT="10001" 
+export XRAY_TROJAN_PORT="10002" 
+export XRAY_UDP_PORT="10003" # Untuk Xray Dokodemo-door UDP (HTTP Custom) 
+export WS_SSH_PORT="10004"   # Internal port untuk wstunnel (SSH WS Non-TLS) 
+ 
+# ================================================== 
+# PASSWORD GLOBAL (AKAN DI-GENERATE OTOMATIS SAAT INSTALASI PERTAMA) 
+# ================================================== 
+# Ganti ini jika Anda ingin mengatur password global secara manual sebelum instalasi. 
+# Jika tidak, skrip akan meng-generate-nya. 
+export TROJAN_PASS="Trojan2025SecurePass" 
+export HYSTERIA_PASS="Hysteria2025SecurePass" 
+export ZIVPN_PASS="Zivpn2025SecurePass" 
+ 
+# ================================================== 
+# COLORS (Untuk tampilan CLI) 
+# ================================================== 
+export R="\033[1;31m" 
+export G="\033[1;32m" 
+export Y="\033[1;33m" 
+export B="\033[1;34m" 
+export P="\033[1;35m" 
+export C="\033[1;36m" 
+export W="\033[1;37m" 
+export Z="\033[0m" 
+export BL="\033[5m" 
+export RV="\033[7m"

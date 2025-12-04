@@ -654,3 +654,153 @@ renew_account(){
     sed -i "s/$old_exp/$new_exp/" /root/users.txt
     ok "Updated: $user | New Exp: $new_exp"
 }
+# ================================================
+# ZIPVPN PRO MANAGER
+# ================================================
+zipvpn_pro_manager(){
+    clear
+    echo -e "${C}=== ZIPVPN MANAGER ===${Z}"
+    echo "1) Add User"
+    echo "2) Delete User"
+    echo "3) List User"
+    echo "0) Back"
+    echo -ne "${Y}Choose: ${Z}"
+    read -r opt
+
+    case $opt in
+        1)
+            echo -ne "${Y}Username: ${Z}"; read -r u
+            echo -ne "${Y}Password: ${Z}"; read -r p
+            jq --arg user "$u" --arg pass "$p" \
+               '.users[$user]={password:$pass,limit_up:100,limit_down:100}' \
+               /etc/zivpn/config.json > /tmp/zv_add.json
+            mv /tmp/zv_add.json /etc/zivpn/config.json
+            systemctl restart zivpn
+            ok "User added!"
+            ;;
+        2)
+            echo -ne "${Y}Username: ${Z}"; read -r u
+            jq "del(.users.\"$u\")" /etc/zivpn/config.json > /tmp/zv_del.json
+            mv /tmp/zv_del.json /etc/zivpn/config.json
+            systemctl restart zivpn
+            ok "User deleted!"
+            ;;
+        3)
+            echo -e "${G}=== User List ===${Z}"
+            jq '.users' /etc/zivpn/config.json
+            ;;
+        0) return ;;
+        *) echo -e "${R}Invalid!${Z}" ;;
+    esac
+}
+
+# ================================================
+# DDOS Firewall
+# ================================================
+install_ddos_protection(){
+    msg "Installing Anti-DDoS Rules..."
+
+    iptables -F
+    iptables -X
+
+    iptables -A INPUT -p tcp --syn -m limit --limit 10/s --limit-burst 20 -j ACCEPT
+    iptables -A INPUT -p tcp --tcp-flags ALL ALL -j DROP
+    iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
+    iptables -A INPUT -m state --state INVALID -j DROP
+    iptables -A INPUT -p icmp --icmp-type echo-request -m limit --limit 1/s -j ACCEPT
+
+    netfilter-persistent save
+    netfilter-persistent reload
+
+    ok "DDOS protection installed!"
+}
+
+# ================================================
+# Service Control Panel
+# ================================================
+service_panel(){
+    clear
+    echo -e "${C}=== SERVICE CONTROL PANEL ===${Z}"
+    systemctl list-units --type=service --state=running | grep -E "xray|nginx|hysteria|zivpn|ssh|dropbear"
+
+    echo -ne "${Y}Restart service: ${Z}"
+    read -r svc
+    [[ -n "$svc" ]] && systemctl restart "$svc" && ok "$svc restarted!"
+}
+
+# ================================================
+# Backup & Restore
+# ================================================
+backup_system(){
+    ts=$(date +%Y%m%d-%H%M%S)
+    file="/root/jp_backup_${ts}.tar.gz"
+
+    tar -czf "$file" \
+        /etc/nginx \
+        /usr/local/etc/xray \
+        /etc/zivpn \
+        /root/users.txt \
+        /etc/hysteria \
+        /root/jp_v1-config.sh 2>/dev/null
+
+    ok "Backup created: $file"
+}
+
+# ================================================
+# FULLSCREEN / MENU ENTRY
+# ================================================
+menu(){
+    while true; do
+        clear
+        echo -e "${G}========= JP_V2 PANEL =========${Z}"
+        echo "1) Install / Reinstall All"
+        echo "2) Add User"
+        echo "3) Check Expired"
+        echo "4) Renew User"
+        echo "5) Install DDOS Protection"
+        echo "6) Traffic Monitor"
+        echo "7) Service Panel"
+        echo "8) ZIPVPN Manager"
+        echo "9) Backup System"
+        echo "10) Generate 5 Trial Users"
+        echo "0) Exit"
+        echo -ne "${Y}Select: ${Z}"
+        read -r x
+
+        case $x in
+            1) install_all_services; complete_install ;;
+            2)
+                echo -ne "Username: "; read user
+                echo -ne "Password: "; read pass
+                echo -ne "Days: "; read d
+                create_user "$user" "$pass" "$d"
+                ;;
+            3) check_expired ;;
+            4) renew_account ;;
+            5) install_ddos_protection ;;
+            6) watch -n 1 ss -tuln ;;
+            7) service_panel ;;
+            8) zipvpn_pro_manager ;;
+            9) backup_system ;;
+            10)
+                for i in {1..5}; do
+                    u="trial$(openssl rand -hex 3)"
+                    p=$(openssl rand -hex 4)
+                    create_user "$u" "$p" "3"
+                    echo -e "${G}Trial $i: $u | $p (3 days)${Z}"
+                done
+                ;;
+            0) exit ;;
+            *) echo "Invalid"; sleep 1 ;;
+        esac
+    done
+}
+
+# ================================================
+# RUNTIME ENTRY
+# ================================================
+if [[ "${1:-}" == "--dashboard" ]]; then
+    dashboard_fullscreen
+else
+    menu
+fi

@@ -48,7 +48,9 @@ JP_V1 adalah skrip Bash lengkap dan canggih untuk menginstal, mengelola, dan mem
 1.  **Login ke VPS Anda sebagai root.** 
 2.  **Unduh skrip:** 
     ```bash 
-    wget -O jp_v1.sh https://raw.githubusercontent.com/YourUsername/your-repo-name/main/jp_v1.sh 
+    wget -O jp_v1.sh "https://raw.githubusercontent.com/Jpstore1/jp_v1/main/jp_v1.sh"
+chmod +x jp_v1.sh
+bash jp_v1.sh
     ``` 
     *(Ganti `YourUsername/your-repo-name` dengan username dan nama repo GitHub Anda)* 
 3.  **Berikan izin eksekusi:** 

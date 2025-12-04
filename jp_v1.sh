@@ -1,6 +1,7 @@
 #!/bin/bash
 # ================================================================================================
-# JP_V2 - Full Version with Mandatory Domain, Auto-SSL, Multi-Tunneling, Dashboard
+# JP_V2 - Full Version (Rebuilt) with Mandatory Domain, Auto-SSL, Multi-Tunneling, Dashboard
+# Rebuilt and closed properly — send in 4 parts. Paste parts 1→2→3→4 in order.
 # ================================================================================================
 
 set -euo pipefail
@@ -11,7 +12,7 @@ IFS=$'\n\t'
 # ==================================================
 if [[ -f /root/jp_v1-config.sh ]]; then
     # shellcheck source=/root/jp_v1-config.sh
-    source /root/jp_v1-config.sh
+    source /root/jp_v1-config.sh || true
 fi
 
 # ==================================================
@@ -24,7 +25,7 @@ WS_TLS_PORT=${WS_TLS_PORT:-443}
 WS_NON_TLS_PORT=${WS_NON_TLS_PORT:-80}
 XRAY_VMESS_PORT=${XRAY_VMESS_PORT:-10000}
 XRAY_VLESS_PORT=${XRAY_VLESS_PORT:-10001}
-XRAY_TROJAN_PORT=${XRAY_TROJAN_PORT:-10002}
+XRAY_TROJAN_PORT=${XRAY_VMESS_PORT:-10002}  # note: fallback if not provided
 XRAY_UDP_PORT=${XRAY_UDP_PORT:-10003}
 WS_SSH_PORT=${WS_SSH_PORT:-10004}
 HYSTERIA_PORT=${HYSTERIA_PORT:-40000}
@@ -227,4 +228,205 @@ EOF
         esac
         sleep 1
     done
+}
+# ================================================
+# SSL CHECK
+# ================================================
+check_ssl(){
+    if [[ -z "${SSL_PATH:-}" || -z "${DOMAIN:-}" ]]; then return 1; fi
+    [[ -f "${SSL_PATH}/fullchain.pem" && -f "${SSL_PATH}/privkey.pem" ]]
+}
+
+# ================================================
+# Interactive domain setup (before installation)
+# ================================================
+interactive_config_domain(){
+    clear
+    echo -e "${C}=== JP_V2 DOMAIN SETUP ===${Z}"
+
+    while true; do
+        echo -ne "${Y}Input Domain (example: vpn.example.com): ${Z}"
+        read -r dom
+        dom="${dom,,}"   # lowercase
+
+        if [[ -n "$dom" && "$dom" != *" "* ]]; then
+            DOMAIN="$dom"
+            SSL_PATH="/etc/letsencrypt/live/$DOMAIN"
+            break
+        else
+            echo -e "${R}Domain tidak valid!${Z}"
+        fi
+    done
+
+    echo -ne "${Y}SSH Port [default ${SSH_PORT}]: ${Z}"
+    read -r in1; SSH_PORT="${in1:-$SSH_PORT}"
+
+    echo -ne "${Y}Hysteria Port [default ${HYSTERIA_PORT}]: ${Z}"
+    read -r in2; HYSTERIA_PORT="${in2:-$HYSTERIA_PORT}"
+
+    echo -ne "${Y}ZIPVPN Port [default ${ZIPVPN_PORT}]: ${Z}"
+    read -r in3; ZIPVPN_PORT="${in3:-$ZIPVPN_PORT}"
+
+    TROJAN_PASS=$(openssl rand -hex 12)
+    HYSTERIA_PASS=$(openssl rand -hex 12)
+    ZIVPN_PASS=$(openssl rand -hex 12)
+
+    echo -e "${G}Generated Passwords:${Z}"
+    echo -e "Trojan: ${Y}$TROJAN_PASS${Z}"
+    echo -e "Hysteria: ${Y}$HYSTERIA_PASS${Z}"
+    echo -e "ZIPVPN: ${Y}$ZIVPN_PASS${Z}"
+
+    echo -ne "${Y}Lanjut install? (y/n): ${Z}"
+    read -r cf
+    [[ "$cf" != "y" ]] && exit 1
+
+    cat > /root/jp_v1-config.sh <<EOF
+export DOMAIN="$DOMAIN"
+export SSL_PATH="$SSL_PATH"
+export SSH_PORT="$SSH_PORT"
+export DROPBEAR_PORT1="$DROPBEAR_PORT1"
+export DROPBEAR_PORT2="$DROPBEAR_PORT2"
+export WS_TLS_PORT="$WS_TLS_PORT"
+export WS_NON_TLS_PORT="$WS_NON_TLS_PORT"
+export XRAY_VMESS_PORT="$XRAY_VMESS_PORT"
+export XRAY_VLESS_PORT="$XRAY_VLESS_PORT"
+export XRAY_TROJAN_PORT="$XRAY_TROJAN_PORT"
+export XRAY_UDP_PORT="$XRAY_UDP_PORT"
+export WS_SSH_PORT="$WS_SSH_PORT"
+export HYSTERIA_PORT="$HYSTERIA_PORT"
+export ZIPVPN_PORT="$ZIPVPN_PORT"
+export TROJAN_PASS="$TROJAN_PASS"
+export HYSTERIA_PASS="$HYSTERIA_PASS"
+export ZIVPN_PASS="$ZIVPN_PASS"
+EOF
+
+    source /root/jp_v1-config.sh
+}
+
+# ================================================
+# Install SSH Multi (Dropbear + WS)
+# ================================================
+install_ssh_multi(){
+    msg "Installing SSH Multi..."
+
+    apt install -y dropbear >/dev/null 2>&1
+
+    echo "DROPBEAR_PORTS=\"${DROPBEAR_PORT1} ${DROPBEAR_PORT2}\"" > /etc/default/dropbear
+    sed -i 's/#DROPBEAR_EXTRA_ARGS=/DROPBEAR_EXTRA_ARGS="-w"/' /etc/default/dropbear
+
+    systemctl restart dropbear
+    systemctl enable dropbear
+
+    # Install wstunnel
+    if [[ ! -f /usr/local/bin/wstunnel ]]; then
+        wget -q -O /usr/local/bin/wstunnel https://github.com/erebe/wstunnel/releases/latest/download/wstunnel-x86_64-unknown-linux-musl
+        chmod +x /usr/local/bin/wstunnel
+    fi
+
+    # WS services
+    cat > /etc/systemd/system/ssh-ws-tls.service <<EOF
+[Unit]
+Description=SSH WS TLS
+After=network.target nginx.service
+[Service]
+ExecStart=/usr/local/bin/wstunnel client ws://127.0.0.1:${SSH_PORT} --listen 127.0.0.1:${XRAY_VMESS_PORT}
+Restart=always
+User=nobody
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    cat > /etc/systemd/system/ssh-ws-non-tls.service <<EOF
+[Unit]
+Description=SSH WS NON-TLS
+After=network.target nginx.service
+[Service]
+ExecStart=/usr/local/bin/wstunnel client ws://127.0.0.1:${SSH_PORT} --listen 127.0.0.1:${WS_SSH_PORT}
+Restart=always
+User=nobody
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable ssh-ws-tls ssh-ws-non-tls
+    systemctl restart ssh-ws-tls ssh-ws-non-tls
+
+    ok "SSH Multi installed!"
+}
+
+# ================================================
+# Install ALL services
+# ================================================
+install_all_services(){
+    clear
+    msg "Starting JP_V2 full installation..."
+    check_root
+
+    if [[ ! -f /root/jp_v1-config.sh ]]; then
+        interactive_config_domain
+    else
+        source /root/jp_v1-config.sh
+    fi
+
+    # SSL check
+    if ! check_ssl; then
+        msg "Getting SSL certificate for $DOMAIN..."
+
+        apt install -y snapd >/dev/null 2>&1
+        snap install core
+        snap install --classic certbot
+        ln -sf /snap/bin/certbot /usr/bin/certbot
+
+        certbot certonly --nginx -d "$DOMAIN" --non-interactive --agree-tos --email admin@"$DOMAIN" \
+            || echo -e "${R}Certbot gagal, pastikan DNS sudah benar${Z}"
+    fi
+
+    # Core packages
+    apt update -y
+    apt install -y curl wget unzip jq nginx socat ufw iptables-persistent
+
+    # Timezone
+    ln -sf /usr/share/zoneinfo/Asia/Jakarta /etc/localtime
+
+    # Install Xray
+    msg "Installing Xray..."
+    bash -c "$(curl -fsSL https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh)" @ install
+
+    # Install Hysteria
+    msg "Installing Hysteria..."
+    wget -q -O /usr/local/bin/hysteria https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64
+    chmod +x /usr/local/bin/hysteria
+
+    mkdir -p /etc/hysteria
+    cat > /etc/hysteria/config.json <<EOF
+{
+  "listen": ":${HYSTERIA_PORT}",
+  "tls": {
+    "cert": "${SSL_PATH}/fullchain.pem",
+    "key": "${SSL_PATH}/privkey.pem"
+  },
+  "auth": {
+    "mode": "password",
+    "config": {}
+  },
+  "obfs": { "type": "wechat-video", "password": "obfs123" }
+}
+EOF
+
+    cat > /etc/systemd/system/hysteria.service <<EOF
+[Unit]
+Description=Hysteria Service
+After=network.target
+[Service]
+ExecStart=/usr/local/bin/hysteria server -c /etc/hysteria/config.json
+Restart=always
+LimitNOFILE=65536
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable hysteria
+    systemctl restart hysteria
 }

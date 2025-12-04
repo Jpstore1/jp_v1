@@ -141,3 +141,255 @@ MENU
 # ---------------------------
 # End Part 1/4
 # (Continue to Part 2/4)
+# JP_V2 (Full - Part 2/4)
+# Lanjutan langsung dari Part 1
+
+# ==================================================
+# SSL CHECK
+# ==================================================
+check_ssl(){
+  if [[ -z "${SSL_PATH:-}" || -z "${DOMAIN:-}" ]]; then return 1; fi
+  [[ -f "${SSL_PATH}/fullchain.pem" && -f "${SSL_PATH}/privkey.pem" ]]
+}
+
+# ==================================================
+# Interactive domain setup (before installation)
+# ==================================================
+interactive_config_domain(){
+  clear
+  echo -e "${C}=== JP_V2 DOMAIN SETUP ===${Z}"
+
+  while true; do
+    echo -ne "${Y}Input Domain (example: vpn.example.com): ${Z}"
+    read -r dom || true
+
+    dom=${dom:-$DOMAIN}
+
+    if [[ -n "$dom" && "$dom" != *" "* ]]; then
+      DOMAIN="$dom"
+      SSL_PATH="/etc/letsencrypt/live/$DOMAIN"
+      ok "Domain set: $DOMAIN"
+      break
+    else
+      err "Invalid domain!"
+    fi
+  done
+
+  echo -ne "${Y}SSH Port (default $SSH_PORT): ${Z}"
+  read -r ss || true
+  SSH_PORT=${ss:-$SSH_PORT}
+
+  echo -ne "${Y}Hysteria Port (default $HYSTERIA_PORT): ${Z}"
+  read -r hy || true
+  HYSTERIA_PORT=${hy:-$HYSTERIA_PORT}
+
+  echo -ne "${Y}ZIPVPN Port (default $ZIPVPN_PORT): ${Z}"
+  read -r zv || true
+  ZIPVPN_PORT=${zv:-$ZIPVPN_PORT}
+
+  TROJAN_PASS=$(openssl rand -base64 16 | tr -d "=+/" | cut -c1-20)
+  HYSTERIA_PASS=$(openssl rand -base64 16 | tr -d "=+/" | cut -c1-20)
+  ZIVPN_PASS=$(openssl rand -base64 16 | tr -d "=+/" | cut -c1-20)
+
+  echo -e "${G}Generated passwords:${Z}"
+  echo -e "Trojan:   ${Y}$TROJAN_PASS${Z}"
+  echo -e "Hysteria: ${Y}$HYSTERIA_PASS${Z}"
+  echo -e "ZIPVPN:   ${Y}$ZIVPN_PASS${Z}"
+
+  echo -ne "${Y}Continue installation? (y/n): ${Z}"
+  read -r c || true
+  [[ "$c" != "y" && "$c" != "Y" ]] && exit 1
+
+  # save config
+  cat > /root/jp_v1-config.sh <<EOF
+export DOMAIN="$DOMAIN"
+export SSL_PATH="$SSL_PATH"
+export SSH_PORT="$SSH_PORT"
+export DROPBEAR_PORT1="$DROPBEAR_PORT1"
+export DROPBEAR_PORT2="$DROPBEAR_PORT2"
+export WS_TLS_PORT="$WS_TLS_PORT"
+export WS_NON_TLS_PORT="$WS_NON_TLS_PORT"
+export XRAY_VMESS_PORT="$XRAY_VMESS_PORT"
+export XRAY_VLESS_PORT="$XRAY_VLESS_PORT"
+export XRAY_TROJAN_PORT="$XRAY_TROJAN_PORT"
+export XRAY_UDP_PORT="$XRAY_UDP_PORT"
+export WS_SSH_PORT="$WS_SSH_PORT"
+export HYSTERIA_PORT="$HYSTERIA_PORT"
+export ZIPVPN_PORT="$ZIPVPN_PORT"
+export TROJAN_PASS="$TROJAN_PASS"
+export HYSTERIA_PASS="$HYSTERIA_PASS"
+export ZIVPN_PASS="$ZIVPN_PASS"
+EOF
+
+  ok "Configuration saved."
+}
+
+# ==================================================
+# Install SSH + Dropbear + WS Tunnel
+# ==================================================
+install_ssh_multi(){
+  msg "Installing SSH Multi (Dropbear + WS Tunnel)..."
+
+  apt install -y dropbear >/dev/null 2>&1 || warn "dropbear failed"
+
+  echo "DROPBEAR_PORTS=\"$DROPBEAR_PORT1 $DROPBEAR_PORT2\"" > /etc/default/dropbear
+  sed -i 's/#DROPBEAR_EXTRA_ARGS=/DROPBEAR_EXTRA_ARGS="-w"/' /etc/default/dropbear || true
+
+  systemctl restart dropbear >/dev/null 2>&1
+  systemctl enable dropbear >/dev/null 2>&1
+
+  # wstunnel binary
+  if [[ ! -f /usr/local/bin/wstunnel ]]; then
+    wget -q https://github.com/erebe/wstunnel/releases/latest/download/wstunnel-x86_64-unknown-linux-musl \
+      -O /usr/local/bin/wstunnel
+    chmod +x /usr/local/bin/wstunnel
+  fi
+
+  # WS services
+  cat > /etc/systemd/system/ssh-ws-tls.service <<EOF
+[Unit]
+Description=SSH WS TLS
+After=network.target nginx.service
+
+[Service]
+ExecStart=/usr/local/bin/wstunnel client ws://127.0.0.1:$SSH_PORT --listen 127.0.0.1:$XRAY_VMESS_PORT
+Restart=always
+User=nobody
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat > /etc/systemd/system/ssh-ws-nontls.service <<EOF
+[Unit]
+Description=SSH WS Non-TLS
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/wstunnel client ws://127.0.0.1:$SSH_PORT --listen 127.0.0.1:$WS_SSH_PORT
+Restart=always
+User=nobody
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable ssh-ws-tls ssh-ws-nontls
+  systemctl restart ssh-ws-tls ssh-ws-nontls
+
+  ok "SSH Multi installed!"
+}
+
+# ==================================================
+# INSTALL ALL SERVICES
+# ==================================================
+install_all_services(){
+  clear
+  check_root
+
+  if [[ -f /root/jp_v1-installed.flag ]]; then
+    echo -ne "${Y}Already installed. Reinstall? (y/n): ${Z}"
+    read -r r || true
+    [[ "$r" != "y" ]] && return
+    rm -f /root/jp_v1-installed.flag
+  fi
+
+  if [[ ! -f /root/jp_v1-config.sh ]]; then
+    interactive_config_domain
+  else
+    source /root/jp_v1-config.sh || true
+  fi
+
+  if ! check_ssl; then
+    warn "SSL not found, attempting Certbot..."
+
+    if ! command -v certbot >/dev/null 2>&1; then
+      apt install -y snapd >/dev/null 2>&1
+      snap install core >/dev/null 2>&1
+      snap install --classic certbot >/dev/null 2>&1
+      ln -sf /snap/bin/certbot /usr/bin/certbot
+    fi
+
+    certbot certonly --nginx -d "$DOMAIN" --non-interactive --agree-tos --email admin@"$DOMAIN" || warn "Certbot failed"
+  fi
+
+  msg "Installing core dependencies..."
+  apt update -y >/dev/null 2>&1
+  apt install -y curl wget unzip jq git nginx socat ufw vnstat iptables-persistent >/dev/null 2>&1
+
+  ln -sf /usr/share/zoneinfo/Asia/Jakarta /etc/localtime || true
+
+  # XRAY INSTALL
+  msg "Installing Xray core..."
+  if ! command -v xray >/dev/null 2>&1; then
+    bash -c "$(curl -fsSL https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh)" @ install
+  fi
+
+  # HYSTERIA
+  msg "Installing Hysteria..."
+  if [[ ! -f /usr/local/bin/hysteria ]]; then
+    wget -qO /usr/local/bin/hysteria https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64
+    chmod +x /usr/local/bin/hysteria
+  fi
+
+  mkdir -p /etc/hysteria
+
+  cat > /etc/hysteria/config.json <<EOF
+{
+  "listen": ":$HYSTERIA_PORT",
+  "tls": {
+    "cert": "$SSL_PATH/fullchain.pem",
+    "key": "$SSL_PATH/privkey.pem"
+  },
+  "auth": { "mode": "password", "config": {} },
+  "obfs": { "type": "wechat-video", "password": "obfs123" }
+}
+EOF
+
+  cat > /etc/systemd/system/hysteria.service <<EOF
+[Unit]
+Description=Hysteria Server
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/hysteria server -c /etc/hysteria/config.json
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable hysteria
+  systemctl restart hysteria
+
+# ZIPVPN SECTION START
+  msg "Installing ZIPVPN..."
+
+  mkdir -p /etc/zivpn
+
+  if ! command -v zivpn >/dev/null 2>&1; then
+    cd /tmp
+    wget -q -O zi.sh https://raw.githubusercontent.com/zahidbd2/udp-zivpn/main/zi.sh
+    bash zi.sh >/dev/null 2>&1 || true
+  fi
+
+  if [[ ! -f /etc/zivpn/config.json ]]; then
+    echo "{\"users\":{},\"port\":$ZIPVPN_PORT,\"tls\":true}" > /etc/zivpn/config.json
+  fi
+
+  tmp=$(mktemp)
+  jq --arg p "$ZIPVPN_PORT" '.port=($p|tonumber)' /etc/zivpn/config.json > "$tmp" && mv "$tmp" /etc/zivpn/config.json
+
+  tmp=$(mktemp)
+  jq --arg c "$SSL_PATH/fullchain.pem" --arg k "$SSL_PATH/privkey.pem" '.cert=$c | .key=$k' /etc/zivpn/config.json > "$tmp" && mv "$tmp" /etc/zivpn/config.json
+
+  tmp=$(mktemp)
+  jq --arg p "$ZIVPN_PASS" '.users.admin={"password":$p,"limit_up":100,"limit_down":100}' /etc/zivpn/config.json > "$tmp" && mv "$tmp" /etc/zivpn/config.json
+
+# ZIPVPN SECTION END
+
+  ok "ZIPVPN installed!"
+
+# END OF PART 2/4

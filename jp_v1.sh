@@ -26,7 +26,7 @@ KIRI="\033[1;32m>\033[1;33m>\033[1;31m>\033[1;31m$NC"
 ipsaya=$(wget -qO- ipinfo.io/ip)
 data_server=$(curl -v --insecure --silent https://google.com/ 2>&1 | grep Date | sed -e 's/< Date: //')
 date_list=$(date +"%Y-%m-%d" -d "$data_server")
-data_ip="https://github.com/VPNULTIMATE/JP_V1"
+data_ip="https://github.com/Jpstore1/ip"
 checking_sc() {
   useexp=$(wget -qO- $data_ip | grep $ipsaya | awk '{print $3}')
   if [[ $date_list < $useexp ]]; then
@@ -120,7 +120,7 @@ red='\e[1;31m'
 green='\e[0;32m'
 NC='\e[0m'
 MYIP=$(curl -sS ipv4.icanhazip.com)
-url_izin="https://github.com/VPNULTIMATE/JP_V1"
+url_izin="https://github.com/Jpstore1/ip"
 rm -f /usr/bin/user
 username=$(curl $url_izin | grep $MYIP | awk '{print $2}')
 echo "$username" >/usr/bin/user

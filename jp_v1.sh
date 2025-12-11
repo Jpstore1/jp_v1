@@ -151,7 +151,7 @@ sts="${Error}"
 fi
 echo -e "\e[32mloading...\e[0m"
 clear
-REPO="https://raw.githubusercontent.com/RaikazuWebId/xvpn/main/"
+REPO="https://github.com/Jpstore1/jp_v1/blob/main/jp_v1.sh"
 start=$(date +%s)
 secs_to_human() {
 echo "Installation time : $((${1} / 3600)) hours $(((${1} / 60) % 60)) minute's $((${1} % 60)) seconds"

